@@ -12,30 +12,6 @@ Professional quality control tracking system for SilverScreen Printing & Fulfill
 ✅ **Date Range Filtering** - Analyze specific time periods  
 ✅ **Export Reports** - Download CSV reports for customer sharing  
 
-## Quick Start
-
-### 1. Create GitHub Repository
-
-```bash
-git clone https://github.com/YOUR_USERNAME/quality-control-dashboard.git
-cd quality-control-dashboard
-```
-
-### 2. Add These Files
-
-- `quality_control_dashboard.py` (main app)
-- `requirements.txt` (dependencies)
-- `README.md` (this file)
-
-### 3. Deploy to Streamlit Cloud
-
-1. Go to https://share.streamlit.io/
-2. Sign in with GitHub
-3. Click "New app"
-4. Select your repo
-5. Main file: `quality_control_dashboard.py`
-6. Deploy!
-
 ## Usage
 
 ### Enter Job Data
