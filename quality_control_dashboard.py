@@ -544,13 +544,13 @@ def main():
 
     st.markdown("---")
 
-    # Sidebar Navigation: larger "Navigation" label
+    # Sidebar Navigation: header + radio so all options are visible
     with st.sidebar:
         st.markdown(
             "<h3 style='margin-bottom:8px;'>Navigation</h3>",
             unsafe_allow_html=True,
         )
-        menu = st.selectbox(
+        menu = st.radio(
             "",
             [
                 "📝 Job Data Submission",
@@ -560,6 +560,7 @@ def main():
                 "👥 Manage Customers",
                 "⚙️ Manage Data",
             ],
+            index=0,
         )
 
     # ========================================================================
@@ -1062,7 +1063,7 @@ def main():
         st.warning("Warning: Deleting a job is permanent.")
 
         job_options = df.apply(
-            lambda row: f\"{row['customer_name']} - {row['job_number']} - {row['production_date'].strftime('%Y-%m-%d')} (ID: {row['id']})\",
+            lambda row: f"{row['customer_name']} - {row['job_number']} - {row['production_date'].strftime('%Y-%m-%d')} (ID: {row['id']})",
             axis=1,
         ).tolist()
 
