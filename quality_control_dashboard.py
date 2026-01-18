@@ -276,12 +276,12 @@ def main():
     
     with col1:
         try:
-            st.image("silverscreen_logo.png", width=150)
+            st.image("silverscreen_logo.png", width=160)
         except:
             st.markdown("### 🎨")
     
     with col2:
-        st.title("📊 Quality Control Dashboard")
+        st.title("Quality Control Dashboard")
         st.markdown("### SilverScreen Printing & Fulfillment")
     
     st.markdown("---")
@@ -296,7 +296,7 @@ def main():
     # DATA ENTRY PAGE
     # ========================================================================
     
-    if menu == "📝 Enter Job Data":
+    if menu == "Enter Job Data":
         st.header("Enter New Job Data")
         
         # Customer selection
@@ -420,7 +420,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            st.markdown("### 📊 Damages vs Total Pieces")
+            st.markdown("### Damages vs Total Pieces")
             fig = go.Figure()
             fig.add_trace(go.Bar(x=df['job_number'], y=df['total_pieces'], name='Total Pieces', marker_color='lightblue'))
             fig.add_trace(go.Bar(x=df['job_number'], y=df['total_damages'], name='Damages', marker_color='red'))
@@ -431,7 +431,7 @@ def main():
         st.markdown("---")
         csv = df.to_csv(index=False)
         st.download_button(
-            label="📊 Download Report (CSV)",
+            label="Download Report (CSV)",
             data=csv,
             file_name=f"qc_report_{selected_customer.replace(' ', '_')}_{start_date}_{end_date}.csv",
             mime="text/csv"
@@ -441,7 +441,7 @@ def main():
     # ALL CUSTOMERS OVERVIEW
     # ========================================================================
     
-    elif menu == "🏢 All Customers Overview":
+    elif menu == "All Customers Overview":
         st.header("All Customers Overview")
         
         stats_df = get_customer_stats()
@@ -451,7 +451,7 @@ def main():
             return
         
         # Overall Stats
-        st.markdown("### 📊 Overall Statistics")
+        st.markdown("### Overall Statistics")
         
         col1, col2, col3, col4 = st.columns(4)
         
@@ -474,7 +474,7 @@ def main():
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### 🏆 Top 10 Best Customers (Lowest Error Rate)")
+            st.markdown("### Top 10 Best Customers Ratings (Lowest Error Rate)")
             best = stats_df.nsmallest(10, 'error_rate')
             fig = px.bar(best, x='customer_name', y='error_rate', title="Best Performing Customers")
             fig.update_layout(xaxis_title="Customer", yaxis_title="Error Rate (%)", showlegend=False)
@@ -490,7 +490,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
         
         # Full Customer Table
-        st.markdown("### 📋 All Customer Statistics")
+        st.markdown("### All Customer Statistics")
         
         display_df = stats_df.copy()
         display_df['error_rate'] = display_df['error_rate'].apply(lambda x: f"{x:.2f}%")
