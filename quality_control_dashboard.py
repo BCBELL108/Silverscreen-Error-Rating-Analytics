@@ -280,7 +280,6 @@ def load_default_customers():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # Check if customers table is empty
     cursor.execute("SELECT COUNT(*) FROM customers")
     count = cursor.fetchone()[0]
 
@@ -511,12 +510,11 @@ def delete_job(job_id: int) -> None:
 
 def main():
     st.set_page_config(
-        page_title="Screenprint Quality Control Dashboard",
+        page_title="Screenprint QC Dashboard",
         page_icon="📊",
         layout="wide",
     )
 
-    # Initialize database and load default customers
     init_db()
     load_default_customers()
 
@@ -527,45 +525,48 @@ def main():
 
     with logo_col2:
         try:
-            st.image("silverscreen_logo.png", width=160)
+            st.image("silverscreen_logo.png", width=260)
         except Exception:
             st.empty()
 
         st.markdown(
-            "<h1 style='text-align:center; margin-bottom:0;'>Screenprint Quality Control Dashboard</h1>",
+            "<h1 style='text-align:center; margin-bottom:0; font-size:40px;'>Screenprint QC Dashboard</h1>",
             unsafe_allow_html=True,
         )
         st.markdown(
-            "<h3 style='text-align:center; margin-top:0;'>Silverscreen Decoration & Fulfillment</h3>",
+            "<h3 style='text-align:center; margin-top:4px; font-size:22px;'>Silverscreen Decoration & Fulfillment</h3>",
             unsafe_allow_html=True,
         )
         st.markdown(
-            "<p style='text-align:center; font-size:12px; color:gray;'>Last updated: "
-            + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            + "</p>",
+            "<p style='text-align:center; font-size:12px; color:gray; margin-top:4px;'>v1.7 1.18.2026</p>",
             unsafe_allow_html=True,
         )
 
     st.markdown("---")
 
-    # Sidebar Navigation
-    menu = st.sidebar.selectbox(
-        "Navigation",
-        [
-            "📝 Enter Job Data",
-            "📈 Customer Analytics",
-            "🏢 All Customers Overview",
-            "📋 View All Jobs",
-            "👥 Manage Customers",
-            "⚙️ Manage Data",
-        ],
-    )
+    # Sidebar Navigation: larger "Navigation" label
+    with st.sidebar:
+        st.markdown(
+            "<h3 style='margin-bottom:8px;'>Navigation</h3>",
+            unsafe_allow_html=True,
+        )
+        menu = st.selectbox(
+            "",
+            [
+                "📝 Job Data Submission",
+                "📈 Customer Analytics",
+                "🏢 All Customers Overview",
+                "📋 View All Jobs",
+                "👥 Manage Customers",
+                "⚙️ Manage Data",
+            ],
+        )
 
     # ========================================================================
-    # DATA ENTRY PAGE
+    # JOB DATA SUBMISSION
     # ========================================================================
-    if menu == "📝 Enter Job Data":
-        st.header("Job Quality Data Entry")
+    if menu == "📝 Job Data Submission":
+        st.header("Job Data Submission")
 
         customers_df = get_all_customers()
         customer_options = customers_df["customer_name"].tolist()
@@ -668,13 +669,12 @@ def main():
         if selected_customer == "-- All Customers --":
             df = get_jobs_by_date_range(start_date, end_date)
             st.subheader(f"All Customers - {start_date} to {end_date}")
-            target_rate = 2.0  # default company target
+            target_rate = 2.0
         else:
             customer_row = customers_df[
                 customers_df["customer_name"] == selected_customer
             ].iloc[0]
             customer_id = customer_row["id"]
-            # Series.get is fine here; fallback to 2.0 if missing
             target_rate = customer_row.get("target_error_rate", 2.0)
             if target_rate is None:
                 target_rate = 2.0
@@ -1062,7 +1062,7 @@ def main():
         st.warning("Warning: Deleting a job is permanent.")
 
         job_options = df.apply(
-            lambda row: f"{row['customer_name']} - {row['job_number']} - {row['production_date'].strftime('%Y-%m-%d')} (ID: {row['id']})",
+            lambda row: f\"{row['customer_name']} - {row['job_number']} - {row['production_date'].strftime('%Y-%m-%d')} (ID: {row['id']})\",
             axis=1,
         ).tolist()
 
