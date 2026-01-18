@@ -1,7 +1,4 @@
-# Silverscreen-Error-Rating-Analytics
-Application designed to track historical error rating data and provide insights. 
-# Quality Control Dashboard - Customer Tracking Edition
-
+# Silverscreen Error Rating Analytics
 Professional quality control tracking system for SilverScreen Printing & Fulfillment operations team with **customer-specific analytics**.
 
 ## Features
