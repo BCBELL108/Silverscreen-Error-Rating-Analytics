@@ -519,7 +519,31 @@ def main():
     load_default_customers()
 
     # ------------------------------------------------------------------------
-    # Header with centered logo and titles
+    # Global CSS tweaks (sidebar nav look)
+    # ------------------------------------------------------------------------
+    st.markdown(
+        """
+        <style>
+        /* Sidebar radio: make it look more like a simple nav list */
+        div[data-testid="stSidebar"] .stRadio > label {
+            font-weight: 600;
+        }
+        div[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label {
+            border-radius: 0 !important;
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+        }
+        /* Slight grey background for the selected item; this selector may vary by Streamlit version */
+        div[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label[aria-checked="true"] {
+            background-color: rgba(255, 255, 255, 0.06) !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ------------------------------------------------------------------------
+    # Header with centered logo and titles (single-line title)
     # ------------------------------------------------------------------------
     logo_col1, logo_col2, logo_col3 = st.columns([1, 2, 1])
 
@@ -529,16 +553,45 @@ def main():
         except Exception:
             st.empty()
 
+        # Title forced to a single line
         st.markdown(
-            "<h1 style='text-align:center; margin-bottom:0; font-size:40px;'>Screenprint QC Dashboard</h1>",
+            """
+            <h1 style="
+                text-align:center;
+                margin-bottom:4px;
+                font-size:34px;
+                white-space:nowrap;
+            ">
+                Screenprint QC Dashboard
+            </h1>
+            """,
             unsafe_allow_html=True,
         )
+
         st.markdown(
-            "<h3 style='text-align:center; margin-top:4px; font-size:22px;'>Silverscreen Decoration & Fulfillment</h3>",
+            """
+            <h3 style="
+                text-align:center;
+                margin-top:0;
+                font-size:18px;
+            ">
+                Silverscreen Decoration &amp; Fulfillment
+            </h3>
+            """,
             unsafe_allow_html=True,
         )
+
         st.markdown(
-            "<p style='text-align:center; font-size:12px; color:gray; margin-top:4px;'>v1.7 1.18.2026</p>",
+            """
+            <p style="
+                text-align:center;
+                font-size:12px;
+                color:gray;
+                margin-top:2px;
+            ">
+                v1.7 1.18.2026
+            </p>
+            """,
             unsafe_allow_html=True,
         )
 
