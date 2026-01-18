@@ -511,7 +511,7 @@ def delete_job(job_id: int) -> None:
 
 def main():
     st.set_page_config(
-        page_title="Screenprint Quality Control Dashboard",
+        page_title="Screenprint QC Dashboard",
         page_icon="📊",
         layout="wide",
     )
@@ -521,46 +521,45 @@ def main():
     load_default_customers()
 
     # ------------------------------------------------------------------------
-    # Header with centered logo and titles
+    # SIDEBAR with Logo at Top and Radio Navigation
     # ------------------------------------------------------------------------
-    logo_col1, logo_col2, logo_col3 = st.columns([1, 2, 1])
-
-    with logo_col2:
+    with st.sidebar:
+        # Logo at top of sidebar (full width)
         try:
-            st.image("silverscreen_logo.png", width=160)
+            st.image("silverscreen_logo.png", use_column_width=True)
         except Exception:
-            st.empty()
-
-        st.markdown(
-            "<h1 style='text-align:center; margin-bottom:0;'>Screenprint Quality Control Dashboard</h1>",
-            unsafe_allow_html=True,
+            st.markdown("### 🎨 SilverScreen")
+        
+        st.markdown("---")
+        
+        # Navigation as radio buttons (all visible)
+        st.markdown("### Navigation")
+        menu = st.radio(
+            "",
+            [
+                "🏠 KPI Overview",
+                "📝 Enter Job Data",
+                "📈 Customer Analytics",
+                "🏢 All Customers Overview",
+                "📋 View All Jobs",
+                "👥 Manage Customers",
+                "⚙️ Manage Data",
+            ],
+            label_visibility="collapsed"
         )
-        st.markdown(
-            "<h3 style='text-align:center; margin-top:0;'>Silverscreen Decoration & Fulfillment™</h3>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            "<p style='text-align:center; font-size:12px; color:gray;'>Last updated: "
-            + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            + "</p>",
-            unsafe_allow_html=True,
-        )
 
-    st.markdown("---")
-
-    # Sidebar Navigation
-    menu = st.sidebar.selectbox(
-        "Navigation",
-        [
-            "🏠 KPI Overview",
-            "📝 Enter Job Data",
-            "📈 Customer Analytics",
-            "🏢 All Customers Overview",
-            "📋 View All Jobs",
-            "👥 Manage Customers",
-            "⚙️ Manage Data",
-        ],
+    # ------------------------------------------------------------------------
+    # Main Header (Simple and Clean)
+    # ------------------------------------------------------------------------
+    st.markdown(
+        "<h1 style='text-align:center;'>Screenprint QC Dashboard</h1>",
+        unsafe_allow_html=True,
     )
+    st.markdown(
+        "<p style='text-align:center; font-size:14px; color:gray;'>Silverscreen Decoration & Fulfillment®</p>",
+        unsafe_allow_html=True,
+    )
+    st.markdown("---")
 
     # ========================================================================
     # KPI OVERVIEW
@@ -674,42 +673,16 @@ def main():
         st.header("Job Quality Data Entry")
 
         customers_df = get_all_customers()
+        customer_options = customers_df["customer_name"].tolist()
         
-        # Radio buttons instead of dropdown
-        st.markdown("### Select Customer")
-        customer_names = customers_df["customer_name"].tolist()
-        
-        # Create radio buttons in 3 columns for better layout
-        num_cols = 3
-        cols = st.columns(num_cols)
-        
-        # Use session state to track selected customer
-        if 'selected_customer_radio' not in st.session_state:
-            st.session_state.selected_customer_radio = None
-        
-        # Split customers into chunks for columns
-        chunk_size = (len(customer_names) + num_cols - 1) // num_cols
-        
-        selected_customer = None
-        for col_idx, col in enumerate(cols):
-            start_idx = col_idx * chunk_size
-            end_idx = min((col_idx + 1) * chunk_size, len(customer_names))
-            
-            with col:
-                for customer in customer_names[start_idx:end_idx]:
-                    if st.radio(
-                        "",
-                        [customer],
-                        key=f"radio_{customer}",
-                        label_visibility="collapsed"
-                    ):
-                        selected_customer = customer
-                        st.session_state.selected_customer_radio = customer
+        # Simple selectbox for customer selection
+        selected_customer = st.selectbox(
+            "Select Customer *",
+            ["-- Select Customer --"] + customer_options,
+            help="Choose the customer for this job"
+        )
 
-        if not selected_customer and st.session_state.selected_customer_radio:
-            selected_customer = st.session_state.selected_customer_radio
-
-        if not selected_customer:
+        if selected_customer == "-- Select Customer --":
             st.info("👆 Please select a customer to continue")
             return
 
@@ -770,8 +743,6 @@ def main():
                     f"✅ Job {job_number} for {selected_customer} saved successfully!"
                 )
                 st.balloons()
-                # Clear selection
-                st.session_state.selected_customer_radio = None
 
     # ========================================================================
     # CUSTOMER ANALYTICS
