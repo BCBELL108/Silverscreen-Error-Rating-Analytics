@@ -521,66 +521,196 @@ def main():
     load_default_customers()
 
     # ------------------------------------------------------------------------
-    # SIDEBAR: logo + navigation (radio, no dropdown, no KPI)
+    # Header with centered logo and titles
     # ------------------------------------------------------------------------
-    with st.sidebar:
+    logo_col1, logo_col2, logo_col3 = st.columns([1, 2, 1])
+
+    with logo_col2:
         try:
-            st.image("silverscreen_logo.png", width=130)
+            st.image("silverscreen_logo.png", width=160)
         except Exception:
-            st.markdown("### Silverscreen")
+            st.empty()
 
-        st.markdown("### Navigation")
-        menu = st.radio(
-            label="",
-            options=[
-                "📝 Enter Job Data",
-                "📈 Customer Analytics",
-                "🏢 All Customers Overview",
-                "📋 View All Jobs",
-                "👥 Manage Customers",
-                "⚙️ Manage Data",
-            ],
-            index=0,  # default to Enter Job Data
-            label_visibility="collapsed",
+        st.markdown(
+            "<h1 style='text-align:center; margin-bottom:0;'>Screenprint Quality Control Dashboard</h1>",
+            unsafe_allow_html=True,
         )
-
-    # ------------------------------------------------------------------------
-    # MAIN HEADER (text only)
-    # ------------------------------------------------------------------------
-    st.markdown(
-        "<h1 style='text-align:center; margin-bottom:0;'>Screenprint Quality Control Dashboard</h1>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<h3 style='text-align:center; margin-top:0;'>Silverscreen Decoration & Fulfillment</h3>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<p style='text-align:center; font-size:12px; color:gray;'>Last updated: "
-        + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        + "</p>",
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            "<h3 style='text-align:center; margin-top:0;'>Silverscreen Decoration & Fulfillment™</h3>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<p style='text-align:center; font-size:12px; color:gray;'>Last updated: "
+            + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            + "</p>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
 
+    # Sidebar Navigation
+    menu = st.sidebar.selectbox(
+        "Navigation",
+        [
+            "🏠 KPI Overview",
+            "📝 Enter Job Data",
+            "📈 Customer Analytics",
+            "🏢 All Customers Overview",
+            "📋 View All Jobs",
+            "👥 Manage Customers",
+            "⚙️ Manage Data",
+        ],
+    )
+
     # ========================================================================
-    # DATA ENTRY PAGE (DEFAULT)
+    # KPI OVERVIEW
     # ========================================================================
-    if menu == "📝 Enter Job Data":
+    if menu == "🏠 KPI Overview":
+        st.header("Last 7 Days – QC Snapshot")
+
+        today = datetime.today().date()
+        start_date = today - timedelta(days=7)
+
+        df_7 = get_jobs_by_date_range(start_date, today)
+
+        st.caption(
+            f"Window: {start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')}"
+        )
+
+        if df_7.empty:
+            st.info(
+                "No jobs recorded in the last 7 days. Once jobs are entered, this home screen will show live KPIs."
+            )
+            return
+
+        # Core KPIs
+        total_jobs_7 = len(df_7)
+        total_pieces_7 = df_7["total_pieces"].sum()
+        total_damages_7 = df_7["total_damages"].sum()
+        error_rate_7 = (
+            (total_damages_7 / total_pieces_7) * 100 if total_pieces_7 > 0 else 0
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Jobs (Last 7 Days)", f"{total_jobs_7:,}")
+        with col2:
+            st.metric("Pieces Printed", f"{total_pieces_7:,}")
+        with col3:
+            st.metric("Damages", f"{total_damages_7:,}")
+        with col4:
+            st.metric("Error Rate", f"{error_rate_7:.2f}%")
+
+        st.markdown("---")
+
+        # Daily error rate trend
+        df_7 = df_7.copy()
+        df_7["production_date_only"] = df_7["production_date"].dt.date
+
+        daily = (
+            df_7.groupby("production_date_only")
+            .agg(
+                total_pieces=("total_pieces", "sum"),
+                total_damages=("total_damages", "sum"),
+            )
+            .reset_index()
+        )
+        daily["error_rate"] = (
+            daily["total_damages"] * 100.0 / daily["total_pieces"]
+        ).round(2)
+
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.markdown("### Daily Error Rate (Last 7 Days)")
+            fig = px.line(
+                daily,
+                x="production_date_only",
+                y="error_rate",
+                markers=True,
+                labels={
+                    "production_date_only": "Production Date",
+                    "error_rate": "Error Rate (%)",
+                },
+            )
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col_right:
+            st.markdown("### Top Customers (by Pieces)")
+            top_cust = (
+                df_7.groupby("customer_name")
+                .agg(
+                    total_jobs=("id", "count"),
+                    total_pieces=("total_pieces", "sum"),
+                    total_damages=("total_damages", "sum"),
+                )
+                .reset_index()
+            )
+            top_cust["error_rate"] = (
+                top_cust["total_damages"] * 100.0 / top_cust["total_pieces"]
+            ).round(2)
+            top_cust = top_cust.sort_values("total_pieces", ascending=False).head(5)
+
+            st.dataframe(
+                top_cust[
+                    [
+                        "customer_name",
+                        "total_jobs",
+                        "total_pieces",
+                        "total_damages",
+                        "error_rate",
+                    ]
+                ],
+                use_container_width=True,
+            )
+
+        return
+
+    # ========================================================================
+    # DATA ENTRY PAGE
+    # ========================================================================
+    elif menu == "📝 Enter Job Data":
         st.header("Job Quality Data Entry")
 
         customers_df = get_all_customers()
-        customer_options = customers_df["customer_name"].tolist()
+        
+        # Radio buttons instead of dropdown
+        st.markdown("### Select Customer")
+        customer_names = customers_df["customer_name"].tolist()
+        
+        # Create radio buttons in 3 columns for better layout
+        num_cols = 3
+        cols = st.columns(num_cols)
+        
+        # Use session state to track selected customer
+        if 'selected_customer_radio' not in st.session_state:
+            st.session_state.selected_customer_radio = None
+        
+        # Split customers into chunks for columns
+        chunk_size = (len(customer_names) + num_cols - 1) // num_cols
+        
+        selected_customer = None
+        for col_idx, col in enumerate(cols):
+            start_idx = col_idx * chunk_size
+            end_idx = min((col_idx + 1) * chunk_size, len(customer_names))
+            
+            with col:
+                for customer in customer_names[start_idx:end_idx]:
+                    if st.radio(
+                        "",
+                        [customer],
+                        key=f"radio_{customer}",
+                        label_visibility="collapsed"
+                    ):
+                        selected_customer = customer
+                        st.session_state.selected_customer_radio = customer
 
-        selected_customer = st.selectbox(
-            "Select Customer *",
-            ["-- Select Customer --"] + customer_options,
-            help="Choose the customer for this job",
-        )
+        if not selected_customer and st.session_state.selected_customer_radio:
+            selected_customer = st.session_state.selected_customer_radio
 
-        if selected_customer == "-- Select Customer --":
-            st.info("Please select a customer to continue.")
+        if not selected_customer:
+            st.info("👆 Please select a customer to continue")
             return
 
         customer_id = customers_df[
@@ -621,7 +751,7 @@ def main():
 
         st.markdown("---")
 
-        if st.button("Save Job Data", type="primary", use_container_width=True):
+        if st.button("💾 Save Job Data", type="primary", use_container_width=True):
             if not job_number:
                 st.error("❌ Job Number is required!")
             elif total_pieces <= 0:
@@ -640,6 +770,8 @@ def main():
                     f"✅ Job {job_number} for {selected_customer} saved successfully!"
                 )
                 st.balloons()
+                # Clear selection
+                st.session_state.selected_customer_radio = None
 
     # ========================================================================
     # CUSTOMER ANALYTICS
@@ -665,13 +797,13 @@ def main():
             end_date = st.date_input("End Date", value=datetime.today())
 
         with col3:
-            if st.button("Refresh", use_container_width=True):
+            if st.button("🔄 Refresh", use_container_width=True):
                 st.rerun()
 
         if selected_customer == "-- All Customers --":
             df = get_jobs_by_date_range(start_date, end_date)
             st.subheader(f"All Customers - {start_date} to {end_date}")
-            target_rate = 2.0  # default company target
+            target_rate = 2.0
         else:
             customer_row = customers_df[
                 customers_df["customer_name"] == selected_customer
@@ -684,10 +816,10 @@ def main():
             st.subheader(f"{selected_customer} - {start_date} to {end_date}")
 
         if df.empty:
-            st.warning("No jobs found for this selection.")
+            st.warning("📭 No jobs found for this selection.")
             return
 
-        st.markdown("### Key Performance Metrics")
+        st.markdown("### 📊 Key Performance Metrics")
 
         col1, col2, col3, col4 = st.columns(4)
 
@@ -715,7 +847,7 @@ def main():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("### Error Rate Trend")
+            st.markdown("### 📉 Error Rate Trend")
             fig = px.line(
                 df,
                 x="production_date",
@@ -737,7 +869,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
-            st.markdown("### Damages vs Total Pieces")
+            st.markdown("### 📊 Damages vs Total Pieces")
             fig = go.Figure()
             fig.add_trace(
                 go.Bar(
@@ -772,7 +904,7 @@ def main():
             safe_name = selected_customer.replace(" ", "_")
 
         st.download_button(
-            label="Download Report (CSV)",
+            label="📊 Download Report (CSV)",
             data=csv,
             file_name=f"qc_report_{safe_name}_{start_date}_{end_date}.csv",
             mime="text/csv",
@@ -787,10 +919,10 @@ def main():
         stats_df = get_customer_stats()
 
         if stats_df.empty:
-            st.info("No job data available yet.")
+            st.info("📭 No job data available yet.")
             return
 
-        st.markdown("### Overall Quality Statistics")
+        st.markdown("### 📊 Overall Quality Statistics")
 
         col1, col2, col3, col4 = st.columns(4)
 
@@ -819,7 +951,7 @@ def main():
         col1, col2 = st.columns(2)
 
         with col1:
-            st.markdown("### Top 10 Best-Performing Customers (Lowest Error Rate)")
+            st.markdown("### 🏆 Top 10 Best Customers (Lowest Error Rate)")
             best = stats_df.nsmallest(10, "error_rate")
             fig = px.bar(
                 best,
@@ -836,7 +968,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
 
         with col2:
-            st.markdown("### Top 10 Customers Needing Attention (Highest Error Rate)")
+            st.markdown("### ⚠️ Top 10 Customers Needing Attention (Highest Error Rate)")
             worst = stats_df.nlargest(10, "error_rate")
             fig = px.bar(
                 worst,
@@ -853,7 +985,7 @@ def main():
             fig.update_xaxes(tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("### All Customer Quality Statistics")
+        st.markdown("### 📋 All Customer Statistics")
 
         display_df = stats_df.copy()
         display_df["error_rate"] = display_df["error_rate"].apply(
@@ -874,7 +1006,7 @@ def main():
 
         csv = stats_df.to_csv(index=False)
         st.download_button(
-            label="Download Customer Statistics (CSV)",
+            label="📊 Download Customer Stats (CSV)",
             data=csv,
             file_name=f"customer_stats_{datetime.today().strftime('%Y-%m-%d')}.csv",
             mime="text/csv",
@@ -889,7 +1021,7 @@ def main():
         df = get_all_jobs()
 
         if df.empty:
-            st.info("No jobs in the database yet.")
+            st.info("📭 No jobs in the database yet.")
             return
 
         st.markdown(f"### Total Jobs: {len(df)}")
@@ -920,7 +1052,7 @@ def main():
         )
 
         st.markdown("---")
-        st.markdown("### Search Jobs")
+        st.markdown("### 🔍 Search Jobs")
 
         col1, col2 = st.columns(2)
 
@@ -980,7 +1112,7 @@ def main():
     elif menu == "👥 Manage Customers":
         st.header("Manage Customers")
 
-        tab1, tab2 = st.tabs(["Add New Customer", "View & Set Targets"])
+        tab1, tab2 = st.tabs(["➕ Add New Customer", "📋 View & Set Targets"])
 
         with tab1:
             st.markdown("### Add New Customer")
@@ -989,7 +1121,7 @@ def main():
                 "Customer Name", placeholder="Enter customer name..."
             )
 
-            if st.button("Add Customer", type="primary", use_container_width=True):
+            if st.button("➕ Add Customer", type="primary", use_container_width=True):
                 if not new_customer_name:
                     st.error("❌ Customer name cannot be empty!")
                 else:
@@ -1037,7 +1169,7 @@ def main():
                 target_value = float(target_choice.replace("%", ""))
 
                 if st.button(
-                    "Update Target Error Rate", type="primary"
+                    "💾 Update Target Error Rate", type="primary"
                 ):
                     cust_id = customers_df[
                         customers_df["customer_name"] == cust_name_for_target
@@ -1057,11 +1189,11 @@ def main():
         df = get_all_jobs()
 
         if df.empty:
-            st.info("No jobs to manage yet.")
+            st.info("📭 No jobs to manage yet.")
             return
 
-        st.markdown("### Delete Job")
-        st.warning("Warning: Deleting a job is permanent.")
+        st.markdown("### 🗑️ Delete Job")
+        st.warning("⚠️ Warning: Deleting a job is permanent!")
 
         job_options = df.apply(
             lambda row: f"{row['customer_name']} - {row['job_number']} - {row['production_date'].strftime('%Y-%m-%d')} (ID: {row['id']})",
@@ -1090,7 +1222,7 @@ def main():
                 st.write(f"**Damages:** {job_details['total_damages']:,}")
                 st.write(f"**Error Rate:** {job_details['error_rate']:.2f}%")
 
-            if st.button("Delete This Job", type="primary"):
+            if st.button("🗑️ Delete This Job", type="primary"):
                 delete_job(job_id)
                 st.success("✅ Job deleted successfully!")
                 st.rerun()
