@@ -410,7 +410,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            st.markdown("### 📊 Damages vs Total Pieces")
+            st.markdown("### Damages vs Total Pieces")
             fig = go.Figure()
             fig.add_trace(go.Bar(x=df['job_number'], y=df['total_pieces'], name='Total Pieces', marker_color='lightblue'))
             fig.add_trace(go.Bar(x=df['job_number'], y=df['total_damages'], name='Damages', marker_color='red'))
@@ -421,7 +421,7 @@ def main():
         st.markdown("---")
         csv = df.to_csv(index=False)
         st.download_button(
-            label="📊 Download Report (CSV)",
+            label="📈 Download Report (CSV)",
             data=csv,
             file_name=f"qc_report_{selected_customer.replace(' ', '_')}_{start_date}_{end_date}.csv",
             mime="text/csv"
@@ -441,7 +441,7 @@ def main():
             return
         
         # Overall Stats
-        st.markdown("### 📊 Overall Statistics")
+        st.markdown("### Overall Statistics")
         
         col1, col2, col3, col4 = st.columns(4)
         
