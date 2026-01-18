@@ -280,6 +280,7 @@ def load_default_customers():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
+    # Check if customers table is empty
     cursor.execute("SELECT COUNT(*) FROM customers")
     count = cursor.fetchone()[0]
 
@@ -510,107 +511,168 @@ def delete_job(job_id: int) -> None:
 
 def main():
     st.set_page_config(
-        page_title="Screenprint QC Dashboard",
+        page_title="Screenprint Quality Control Dashboard",
         page_icon="📊",
         layout="wide",
     )
 
+    # Initialize database and load default customers
     init_db()
     load_default_customers()
 
     # ------------------------------------------------------------------------
-    # Global CSS tweaks (sidebar nav look – hide radio bubbles)
+    # Header with centered logo and titles
     # ------------------------------------------------------------------------
-    st.markdown(
-        """
-        <style>
-        /* Center sidebar logo image */
-        div[data-testid="stSidebar"] img {
-            display: block;
-            margin-left: auto;
-            margin-right: auto;
-        }
-        /* Sidebar radio: make it look like a simple nav list */
-        div[data-testid="stSidebar"] .stRadio > label {
-            font-weight: 600;
-        }
-        div[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label {
-            border-radius: 0 !important;
-            padding-top: 4px !important;
-            padding-bottom: 4px !important;
-            padding-left: 0.1rem !important;
-            padding-right: 0.1rem !important;
-        }
-        /* Hide the actual radio inputs (remove bubbles) */
-        div[data-testid="stSidebar"] .stRadio input[type="radio"] {
-            display: none;
-        }
-        /* Hover effect for nav items */
-        div[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:hover {
-            background-color: rgba(255, 255, 255, 0.04) !important;
-        }
-        /* Active nav item: slightly greyed background */
-        div[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label[aria-checked="true"] {
-            background-color: rgba(255, 255, 255, 0.08) !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    logo_col1, logo_col2, logo_col3 = st.columns([1, 2, 1])
 
-    # ------------------------------------------------------------------------
-    # SIDEBAR: logo + navigation
-    # ------------------------------------------------------------------------
-    with st.sidebar:
+    with logo_col2:
         try:
-            st.image("silverscreen_logo.png", use_column_width=True)
+            st.image("silverscreen_logo.png", width=160)
         except Exception:
             st.empty()
 
         st.markdown(
-            "<h3 style='margin-top:16px; margin-bottom:8px;'>Navigation</h3>",
+            "<h1 style='text-align:center; margin-bottom:0;'>Screenprint Quality Control Dashboard</h1>",
             unsafe_allow_html=True,
         )
-        menu = st.radio(
-            "",
-            [
-                "📝 Job Data Submission",
-                "📈 Customer Analytics",
-                "🏢 All Customers Overview",
-                "📋 View All Jobs",
-                "👥 Manage Customers",
-                "⚙️ Manage Data",
-            ],
-            index=0,  # default to Job Data Submission
+        st.markdown(
+            "<h3 style='text-align:center; margin-top:0;'>Silverscreen Decoration & Fulfillment</h3>",
+            unsafe_allow_html=True,
         )
-
-    # ------------------------------------------------------------------------
-    # MAIN HEADER (centered, no logo)
-    # ------------------------------------------------------------------------
-    st.markdown(
-        """
-        <div style="text-align:center; margin-top:10px; margin-bottom:10px;">
-            <h1 style="margin-bottom:4px; font-size:34px; white-space:nowrap;">
-                Screenprint QC Dashboard
-            </h1>
-            <h3 style="margin-top:0; font-size:18px;">
-                Silverscreen Decoration &amp; Fulfillment
-            </h3>
-            <p style="font-size:12px; color:gray; margin-top:2px;">
-                v1.7 1.18.2026
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        st.markdown(
+            "<p style='text-align:center; font-size:12px; color:gray;'>Last updated: "
+            + datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            + "</p>",
+            unsafe_allow_html=True,
+        )
 
     st.markdown("---")
 
+    # Sidebar Navigation (with new KPI Overview)
+    menu = st.sidebar.selectbox(
+        "Navigation",
+        [
+            "🏠 KPI Overview",
+            "📝 Enter Job Data",
+            "📈 Customer Analytics",
+            "🏢 All Customers Overview",
+            "📋 View All Jobs",
+            "👥 Manage Customers",
+            "⚙️ Manage Data",
+        ],
+    )
+
     # ========================================================================
-    # JOB DATA SUBMISSION
+    # KPI OVERVIEW (LAST 7 DAYS)
     # ========================================================================
-    if menu == "📝 Job Data Submission":
-        st.header("Job Data Submission")
+    if menu == "🏠 KPI Overview":
+        st.header("Last 7 Days – QC Snapshot")
+
+        today = datetime.today().date()
+        start_date = today - timedelta(days=7)
+
+        df_7 = get_jobs_by_date_range(start_date, today)
+
+        st.caption(
+            f"Window: {start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')}"
+        )
+
+        if df_7.empty:
+            st.info(
+                "No jobs recorded in the last 7 days. Once jobs are entered, this home screen will show live KPIs."
+            )
+            return
+
+        # Core KPIs
+        total_jobs_7 = len(df_7)
+        total_pieces_7 = df_7["total_pieces"].sum()
+        total_damages_7 = df_7["total_damages"].sum()
+        error_rate_7 = (
+            (total_damages_7 / total_pieces_7) * 100 if total_pieces_7 > 0 else 0
+        )
+
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Jobs (Last 7 Days)", f"{total_jobs_7:,}")
+        with col2:
+            st.metric("Pieces Printed", f"{total_pieces_7:,}")
+        with col3:
+            st.metric("Damages", f"{total_damages_7:,}")
+        with col4:
+            st.metric("Error Rate", f"{error_rate_7:.2f}%")
+
+        st.markdown("---")
+
+        # Daily error rate trend (last 7 days)
+        df_7 = df_7.copy()
+        df_7["production_date_only"] = df_7["production_date"].dt.date
+
+        daily = (
+            df_7.groupby("production_date_only")
+            .agg(
+                total_pieces=("total_pieces", "sum"),
+                total_damages=("total_damages", "sum"),
+            )
+            .reset_index()
+        )
+        daily["error_rate"] = (
+            daily["total_damages"] * 100.0 / daily["total_pieces"]
+        ).round(2)
+
+        col_left, col_right = st.columns(2)
+
+        with col_left:
+            st.markdown("### Daily Error Rate (Last 7 Days)")
+            fig = px.line(
+                daily,
+                x="production_date_only",
+                y="error_rate",
+                markers=True,
+                labels={
+                    "production_date_only": "Production Date",
+                    "error_rate": "Error Rate (%)",
+                },
+            )
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
+
+        # Top customers by pieces in last 7 days
+        with col_right:
+            st.markdown("### Top Customers (by Pieces)")
+            top_cust = (
+                df_7.groupby("customer_name")
+                .agg(
+                    total_jobs=("id", "count"),
+                    total_pieces=("total_pieces", "sum"),
+                    total_damages=("total_damages", "sum"),
+                )
+                .reset_index()
+            )
+            top_cust["error_rate"] = (
+                top_cust["total_damages"] * 100.0 / top_cust["total_pieces"]
+            ).round(2)
+            top_cust = top_cust.sort_values("total_pieces", ascending=False).head(5)
+
+            st.dataframe(
+                top_cust[
+                    [
+                        "customer_name",
+                        "total_jobs",
+                        "total_pieces",
+                        "total_damages",
+                        "error_rate",
+                    ]
+                ],
+                use_container_width=True,
+            )
+
+        return
+
+    # ========================================================================
+    # DATA ENTRY PAGE
+    # ========================================================================
+    elif menu == "📝 Enter Job Data":
+        st.header("Job Quality Data Entry")
 
         customers_df = get_all_customers()
         customer_options = customers_df["customer_name"].tolist()
@@ -713,12 +775,13 @@ def main():
         if selected_customer == "-- All Customers --":
             df = get_jobs_by_date_range(start_date, end_date)
             st.subheader(f"All Customers - {start_date} to {end_date}")
-            target_rate = 2.0
+            target_rate = 2.0  # default company target
         else:
             customer_row = customers_df[
                 customers_df["customer_name"] == selected_customer
             ].iloc[0]
             customer_id = customer_row["id"]
+            # Series.get is fine here; fallback to 2.0 if missing
             target_rate = customer_row.get("target_error_rate", 2.0)
             if target_rate is None:
                 target_rate = 2.0
@@ -1029,3 +1092,114 @@ def main():
 
             new_customer_name = st.text_input(
                 "Customer Name", placeholder="Enter customer name..."
+            )
+
+            if st.button("Add Customer", type="primary", use_container_width=True):
+                if not new_customer_name:
+                    st.error("❌ Customer name cannot be empty!")
+                else:
+                    success = add_customer(new_customer_name.strip())
+                    if success:
+                        st.success(
+                            f"✅ Customer '{new_customer_name}' added successfully!"
+                        )
+                        st.balloons()
+                    else:
+                        st.error(
+                            f"❌ Customer '{new_customer_name}' already exists!"
+                        )
+
+        with tab2:
+            st.markdown("### Customer List & Target Error Rates")
+
+            customers_df = get_all_customers()
+            st.markdown(f"**Total Customers:** {len(customers_df)}")
+
+            display_df = customers_df.copy()
+            display_df["target_error_rate"] = display_df[
+                "target_error_rate"
+            ].apply(lambda x: f"{x:.1f}%")
+
+            st.dataframe(
+                display_df[["customer_name", "date_added", "target_error_rate"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            st.markdown("---")
+            st.markdown("### Set Target Error Rate by Customer")
+
+            if not customers_df.empty:
+                cust_name_for_target = st.selectbox(
+                    "Select Customer",
+                    customers_df["customer_name"].tolist(),
+                )
+                target_choice = st.selectbox(
+                    "Target Error Rate",
+                    ["3.0%", "2.0%", "1.0%"],
+                    help="Standard quality targets. 1.0% is the most strict.",
+                )
+                target_value = float(target_choice.replace("%", ""))
+
+                if st.button(
+                    "Update Target Error Rate", type="primary"
+                ):
+                    cust_id = customers_df[
+                        customers_df["customer_name"] == cust_name_for_target
+                    ]["id"].values[0]
+                    update_customer_target(cust_id, target_value)
+                    st.success(
+                        f"✅ Updated target error rate for {cust_name_for_target} to {target_value:.1f}%"
+                    )
+                    st.rerun()
+
+    # ========================================================================
+    # MANAGE DATA
+    # ========================================================================
+    elif menu == "⚙️ Manage Data":
+        st.header("Manage Data")
+
+        df = get_all_jobs()
+
+        if df.empty:
+            st.info("No jobs to manage yet.")
+            return
+
+        st.markdown("### Delete Job")
+        st.warning("Warning: Deleting a job is permanent.")
+
+        job_options = df.apply(
+            lambda row: f"{row['customer_name']} - {row['job_number']} - {row['production_date'].strftime('%Y-%m-%d')} (ID: {row['id']})",
+            axis=1,
+        ).tolist()
+
+        selected_job = st.selectbox(
+            "Select Job to Delete", ["-- Select --"] + job_options
+        )
+
+        if selected_job != "-- Select --":
+            job_id = int(selected_job.split("ID: ")[1].rstrip(")"))
+            job_details = df[df["id"] == job_id].iloc[0]
+
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.write(f"**Customer:** {job_details['customer_name']}")
+                st.write(f"**Job Number:** {job_details['job_number']}")
+                st.write(
+                    f"**Date:** {job_details['production_date'].strftime('%Y-%m-%d')}"
+                )
+
+            with col2:
+                st.write(f"**Pieces:** {job_details['total_pieces']:,}")
+                st.write(f"**Damages:** {job_details['total_damages']:,}")
+                st.write(f"**Error Rate:** {job_details['error_rate']:.2f}%")
+
+            if st.button("Delete This Job", type="primary"):
+                delete_job(job_id)
+                st.success("✅ Job deleted successfully!")
+                st.rerun()
+
+
+if __name__ == "__main__":
+    main()
