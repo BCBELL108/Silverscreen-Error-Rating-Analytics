@@ -281,7 +281,7 @@ def main():
             st.markdown("### 🎨")
     
     with col2:
-        st.title("📊 Quality Control Dashboard")
+        st.title(" Quality Control Dashboard")
         st.markdown("### SilverScreen Printing & Fulfillment")
     
     st.markdown("---")
