@@ -537,8 +537,7 @@ def main():
         menu = st.radio(
             "",
             [
-                "🏠 KPI Overview",
-                "📝 Enter Job Data",
+                "📝 Job Data Submission",
                 "📈 Customer Analytics",
                 "🏢 All Customers Overview",
                 "📋 View All Jobs",
@@ -562,115 +561,10 @@ def main():
     st.markdown("---")
 
     # ========================================================================
-    # KPI OVERVIEW
+    # JOB DATA SUBMISSION PAGE (DEFAULT)
     # ========================================================================
-    if menu == "🏠 KPI Overview":
-        st.header("Last 7 Days – QC Snapshot")
-
-        today = datetime.today().date()
-        start_date = today - timedelta(days=7)
-
-        df_7 = get_jobs_by_date_range(start_date, today)
-
-        st.caption(
-            f"Window: {start_date.strftime('%Y-%m-%d')} to {today.strftime('%Y-%m-%d')}"
-        )
-
-        if df_7.empty:
-            st.info(
-                "No jobs recorded in the last 7 days. Once jobs are entered, this home screen will show live KPIs."
-            )
-            return
-
-        # Core KPIs
-        total_jobs_7 = len(df_7)
-        total_pieces_7 = df_7["total_pieces"].sum()
-        total_damages_7 = df_7["total_damages"].sum()
-        error_rate_7 = (
-            (total_damages_7 / total_pieces_7) * 100 if total_pieces_7 > 0 else 0
-        )
-
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Jobs (Last 7 Days)", f"{total_jobs_7:,}")
-        with col2:
-            st.metric("Pieces Printed", f"{total_pieces_7:,}")
-        with col3:
-            st.metric("Damages", f"{total_damages_7:,}")
-        with col4:
-            st.metric("Error Rate", f"{error_rate_7:.2f}%")
-
-        st.markdown("---")
-
-        # Daily error rate trend
-        df_7 = df_7.copy()
-        df_7["production_date_only"] = df_7["production_date"].dt.date
-
-        daily = (
-            df_7.groupby("production_date_only")
-            .agg(
-                total_pieces=("total_pieces", "sum"),
-                total_damages=("total_damages", "sum"),
-            )
-            .reset_index()
-        )
-        daily["error_rate"] = (
-            daily["total_damages"] * 100.0 / daily["total_pieces"]
-        ).round(2)
-
-        col_left, col_right = st.columns(2)
-
-        with col_left:
-            st.markdown("### Daily Error Rate (Last 7 Days)")
-            fig = px.line(
-                daily,
-                x="production_date_only",
-                y="error_rate",
-                markers=True,
-                labels={
-                    "production_date_only": "Production Date",
-                    "error_rate": "Error Rate (%)",
-                },
-            )
-            fig.update_layout(hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-
-        with col_right:
-            st.markdown("### Top Customers (by Pieces)")
-            top_cust = (
-                df_7.groupby("customer_name")
-                .agg(
-                    total_jobs=("id", "count"),
-                    total_pieces=("total_pieces", "sum"),
-                    total_damages=("total_damages", "sum"),
-                )
-                .reset_index()
-            )
-            top_cust["error_rate"] = (
-                top_cust["total_damages"] * 100.0 / top_cust["total_pieces"]
-            ).round(2)
-            top_cust = top_cust.sort_values("total_pieces", ascending=False).head(5)
-
-            st.dataframe(
-                top_cust[
-                    [
-                        "customer_name",
-                        "total_jobs",
-                        "total_pieces",
-                        "total_damages",
-                        "error_rate",
-                    ]
-                ],
-                use_container_width=True,
-            )
-
-        return
-
-    # ========================================================================
-    # DATA ENTRY PAGE
-    # ========================================================================
-    elif menu == "📝 Enter Job Data":
-        st.header("Job Quality Data Entry")
+    if menu == "📝 Job Data Submission":
+        st.header("Job Data Submission")
 
         customers_df = get_all_customers()
         customer_options = customers_df["customer_name"].tolist()
