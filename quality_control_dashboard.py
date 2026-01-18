@@ -296,8 +296,8 @@ def main():
     # DATA ENTRY PAGE
     # ========================================================================
     
-    if menu == "📝 Enter Job Data":
-        st.header("Enter New Job Data")
+    if menu == "📝 Production Data Submission":
+        st.header("Enter New Production Data By Job") 
         
         # Customer selection
         customers_df = get_all_customers()
@@ -306,11 +306,11 @@ def main():
         selected_customer = st.selectbox(
             "Select Customer *",
             ["-- Select Customer --"] + customer_options,
-            help="Choose the customer for this job"
+            help="Choose the Customer for This Job"
         )
         
         if selected_customer == "-- Select Customer --":
-            st.info("👆 Please select a customer to continue")
+            st.info("Please Select a Customer to Continue")
             return
         
         customer_id = customers_df[customers_df['customer_name'] == selected_customer]['id'].values[0]
@@ -353,8 +353,8 @@ def main():
     # CUSTOMER ANALYTICS
     # ========================================================================
     
-    elif menu == "📈 Customer Analytics":
-        st.header("Customer Analytics")
+    elif menu == "📈 SP Production Analytics":
+        st.header("Production Analytics")
         
         # Customer selection
         customers_df = get_all_customers()
@@ -389,7 +389,7 @@ def main():
             return
         
         # Key Metrics
-        st.markdown("### 📊 Key Metrics")
+        st.markdown("### 📊 Key Performance Metrics")
         
         col1, col2, col3, col4 = st.columns(4)
         
@@ -414,7 +414,7 @@ def main():
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### 📉 Error Rate Trend")
+            st.markdown("### 📉 Screenprinting Error Rate Trend")
             fig = px.line(df, x='production_date', y='error_rate', markers=True, title="Error Rate Over Time")
             fig.update_layout(xaxis_title="Production Date", yaxis_title="Error Rate (%)", hovermode='x unified')
             st.plotly_chart(fig, use_container_width=True)
@@ -441,8 +441,8 @@ def main():
     # ALL CUSTOMERS OVERVIEW
     # ========================================================================
     
-    elif menu == "🏢 All Customers Overview":
-        st.header("All Customers Overview")
+    elif menu == "🏢 All Customer Production Metrics":
+        st.header("All Customers Production Metrics Overview")
         
         stats_df = get_customer_stats()
         
@@ -474,7 +474,7 @@ def main():
         col1, col2 = st.columns(2)
         
         with col1:
-            st.markdown("### 🏆 Top 10 Best Customers (Lowest Error Rate)")
+            st.markdown("### 🏆 Top 10 Best Error Rating By Customers (Lowest Error Rate)")
             best = stats_df.nsmallest(10, 'error_rate')
             fig = px.bar(best, x='customer_name', y='error_rate', title="Best Performing Customers")
             fig.update_layout(xaxis_title="Customer", yaxis_title="Error Rate (%)", showlegend=False)
@@ -482,7 +482,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
         
         with col2:
-            st.markdown("### ⚠️ Top 10 Customers Needing Attention (Highest Error Rate)")
+            st.markdown("### ⚠️ Top 10 Customers Production Needing Attention (Highest Error Rate)")
             worst = stats_df.nlargest(10, 'error_rate')
             fig = px.bar(worst, x='customer_name', y='error_rate', title="Customers Needing Attention", color_discrete_sequence=['red'])
             fig.update_layout(xaxis_title="Customer", yaxis_title="Error Rate (%)", showlegend=False)
@@ -490,7 +490,7 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
         
         # Full Customer Table
-        st.markdown("### 📋 All Customer Statistics")
+        st.markdown("### 📋 All Customer Performance Metrics")
         
         display_df = stats_df.copy()
         display_df['error_rate'] = display_df['error_rate'].apply(lambda x: f"{x:.2f}%")
@@ -503,7 +503,7 @@ def main():
         # Export
         csv = stats_df.to_csv(index=False)
         st.download_button(
-            label="📊 Download Customer Stats (CSV)",
+            label="📊 Download Production By Customer Stats (CSV)",
             data=csv,
             file_name=f"customer_stats_{datetime.today().strftime('%Y-%m-%d')}.csv",
             mime="text/csv"
