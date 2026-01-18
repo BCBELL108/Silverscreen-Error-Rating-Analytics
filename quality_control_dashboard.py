@@ -519,23 +519,39 @@ def main():
     load_default_customers()
 
     # ------------------------------------------------------------------------
-    # Global CSS tweaks (sidebar nav look)
+    # Global CSS tweaks (sidebar nav look – hide radio bubbles)
     # ------------------------------------------------------------------------
     st.markdown(
         """
         <style>
-        /* Sidebar radio: make it look more like a simple nav list */
+        /* Center sidebar logo image */
+        div[data-testid="stSidebar"] img {
+            display: block;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        /* Sidebar radio: make it look like a simple nav list */
         div[data-testid="stSidebar"] .stRadio > label {
             font-weight: 600;
         }
         div[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label {
             border-radius: 0 !important;
-            padding-top: 2px !important;
-            padding-bottom: 2px !important;
+            padding-top: 4px !important;
+            padding-bottom: 4px !important;
+            padding-left: 0.1rem !important;
+            padding-right: 0.1rem !important;
         }
-        /* Slight grey background for the selected item; this selector may vary by Streamlit version */
+        /* Hide the actual radio inputs (remove bubbles) */
+        div[data-testid="stSidebar"] .stRadio input[type="radio"] {
+            display: none;
+        }
+        /* Hover effect for nav items */
+        div[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:hover {
+            background-color: rgba(255, 255, 255, 0.04) !important;
+        }
+        /* Active nav item: slightly greyed background */
         div[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label[aria-checked="true"] {
-            background-color: rgba(255, 255, 255, 0.06) !important;
+            background-color: rgba(255, 255, 255, 0.08) !important;
         }
         </style>
         """,
@@ -543,64 +559,16 @@ def main():
     )
 
     # ------------------------------------------------------------------------
-    # Header with centered logo and titles (single-line title)
+    # SIDEBAR: logo + navigation
     # ------------------------------------------------------------------------
-    logo_col1, logo_col2, logo_col3 = st.columns([1, 2, 1])
-
-    with logo_col2:
+    with st.sidebar:
         try:
-            st.image("silverscreen_logo.png", width=260)
+            st.image("silverscreen_logo.png", use_column_width=True)
         except Exception:
             st.empty()
 
-        # Title forced to a single line
         st.markdown(
-            """
-            <h1 style="
-                text-align:center;
-                margin-bottom:4px;
-                font-size:34px;
-                white-space:nowrap;
-            ">
-                Screenprint QC Dashboard
-            </h1>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            """
-            <h3 style="
-                text-align:center;
-                margin-top:0;
-                font-size:18px;
-            ">
-                Silverscreen Decoration &amp; Fulfillment
-            </h3>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            """
-            <p style="
-                text-align:center;
-                font-size:12px;
-                color:gray;
-                margin-top:2px;
-            ">
-                v1.7 1.18.2026
-            </p>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("---")
-
-    # Sidebar Navigation: header + radio so all options are visible
-    with st.sidebar:
-        st.markdown(
-            "<h3 style='margin-bottom:8px;'>Navigation</h3>",
+            "<h3 style='margin-top:16px; margin-bottom:8px;'>Navigation</h3>",
             unsafe_allow_html=True,
         )
         menu = st.radio(
@@ -613,8 +581,30 @@ def main():
                 "👥 Manage Customers",
                 "⚙️ Manage Data",
             ],
-            index=0,
+            index=0,  # default to Job Data Submission
         )
+
+    # ------------------------------------------------------------------------
+    # MAIN HEADER (centered, no logo)
+    # ------------------------------------------------------------------------
+    st.markdown(
+        """
+        <div style="text-align:center; margin-top:10px; margin-bottom:10px;">
+            <h1 style="margin-bottom:4px; font-size:34px; white-space:nowrap;">
+                Screenprint QC Dashboard
+            </h1>
+            <h3 style="margin-top:0; font-size:18px;">
+                Silverscreen Decoration &amp; Fulfillment
+            </h3>
+            <p style="font-size:12px; color:gray; margin-top:2px;">
+                v1.7 1.18.2026
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("---")
 
     # ========================================================================
     # JOB DATA SUBMISSION
@@ -1039,114 +1029,3 @@ def main():
 
             new_customer_name = st.text_input(
                 "Customer Name", placeholder="Enter customer name..."
-            )
-
-            if st.button("Add Customer", type="primary", use_container_width=True):
-                if not new_customer_name:
-                    st.error("❌ Customer name cannot be empty!")
-                else:
-                    success = add_customer(new_customer_name.strip())
-                    if success:
-                        st.success(
-                            f"✅ Customer '{new_customer_name}' added successfully!"
-                        )
-                        st.balloons()
-                    else:
-                        st.error(
-                            f"❌ Customer '{new_customer_name}' already exists!"
-                        )
-
-        with tab2:
-            st.markdown("### Customer List & Target Error Rates")
-
-            customers_df = get_all_customers()
-            st.markdown(f"**Total Customers:** {len(customers_df)}")
-
-            display_df = customers_df.copy()
-            display_df["target_error_rate"] = display_df[
-                "target_error_rate"
-            ].apply(lambda x: f"{x:.1f}%")
-
-            st.dataframe(
-                display_df[["customer_name", "date_added", "target_error_rate"]],
-                use_container_width=True,
-                hide_index=True,
-            )
-
-            st.markdown("---")
-            st.markdown("### Set Target Error Rate by Customer")
-
-            if not customers_df.empty:
-                cust_name_for_target = st.selectbox(
-                    "Select Customer",
-                    customers_df["customer_name"].tolist(),
-                )
-                target_choice = st.selectbox(
-                    "Target Error Rate",
-                    ["3.0%", "2.0%", "1.0%"],
-                    help="Standard quality targets. 1.0% is the most strict.",
-                )
-                target_value = float(target_choice.replace("%", ""))
-
-                if st.button(
-                    "Update Target Error Rate", type="primary"
-                ):
-                    cust_id = customers_df[
-                        customers_df["customer_name"] == cust_name_for_target
-                    ]["id"].values[0]
-                    update_customer_target(cust_id, target_value)
-                    st.success(
-                        f"✅ Updated target error rate for {cust_name_for_target} to {target_value:.1f}%"
-                    )
-                    st.rerun()
-
-    # ========================================================================
-    # MANAGE DATA
-    # ========================================================================
-    elif menu == "⚙️ Manage Data":
-        st.header("Manage Data")
-
-        df = get_all_jobs()
-
-        if df.empty:
-            st.info("No jobs to manage yet.")
-            return
-
-        st.markdown("### Delete Job")
-        st.warning("Warning: Deleting a job is permanent.")
-
-        job_options = df.apply(
-            lambda row: f"{row['customer_name']} - {row['job_number']} - {row['production_date'].strftime('%Y-%m-%d')} (ID: {row['id']})",
-            axis=1,
-        ).tolist()
-
-        selected_job = st.selectbox(
-            "Select Job to Delete", ["-- Select --"] + job_options
-        )
-
-        if selected_job != "-- Select --":
-            job_id = int(selected_job.split("ID: ")[1].rstrip(")"))
-            job_details = df[df["id"] == job_id].iloc[0]
-
-            col1, col2 = st.columns(2)
-
-            with col1:
-                st.write(f"**Customer:** {job_details['customer_name']}")
-                st.write(f"**Job Number:** {job_details['job_number']}")
-                st.write(
-                    f"**Date:** {job_details['production_date'].strftime('%Y-%m-%d')}"
-                )
-
-            with col2:
-                st.write(f"**Pieces:** {job_details['total_pieces']:,}")
-                st.write(f"**Damages:** {job_details['total_damages']:,}")
-                st.write(f"**Error Rate:** {job_details['error_rate']:.2f}%")
-
-            if st.button("Delete This Job", type="primary"):
-                delete_job(job_id)
-                st.success("✅ Job deleted successfully!")
-                st.rerun()
-
-
-if __name__ == "__main__":
-    main()
