@@ -318,10 +318,10 @@ def load_default_customers():
 
 def add_customer(customer_name: str) -> bool:
     """Add a new customer to the database"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
     try:
+        conn = get_connection()
+        cursor = conn.cursor()
+
         cursor.execute(
             "INSERT INTO customers (customer_name) VALUES (%s)",
             (customer_name,)
@@ -331,9 +331,9 @@ def add_customer(customer_name: str) -> bool:
         conn.close()
         return True
     except psycopg2.IntegrityError:
-        conn.rollback()
-        cursor.close()
-        conn.close()
+        return False
+    except Exception as e:
+        st.error(f"Failed to add customer: {e}")
         return False
 
 
@@ -380,38 +380,48 @@ def add_job(
     """Add a new job to the database"""
     error_rate = (total_damages / total_pieces * 100) if total_pieces > 0 else 0
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    cursor.execute(
-        """
-        INSERT INTO jobs (
-            customer_id,
-            job_number,
-            production_date,
-            total_pieces,
-            total_impressions,
-            total_damages,
-            error_rate,
-            notes
+        # Convert date to string format if needed
+        if hasattr(production_date, 'strftime'):
+            production_date_str = production_date.strftime('%Y-%m-%d')
+        else:
+            production_date_str = str(production_date)
+
+        cursor.execute(
+            """
+            INSERT INTO jobs (
+                customer_id,
+                job_number,
+                production_date,
+                total_pieces,
+                total_impressions,
+                total_damages,
+                error_rate,
+                notes
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                customer_id,
+                job_number,
+                production_date_str,
+                total_pieces,
+                total_impressions,
+                total_damages,
+                error_rate,
+                notes,
+            ),
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            customer_id,
-            job_number,
-            production_date,
-            total_pieces,
-            total_impressions,
-            total_damages,
-            error_rate,
-            notes,
-        ),
-    )
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Failed to add job: {e}")
+        raise
 
 
 def get_all_jobs() -> pd.DataFrame:
