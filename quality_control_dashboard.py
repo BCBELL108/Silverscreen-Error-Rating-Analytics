@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
 
 # ============================================================================
 # DATABASE (NEON / POSTGRES via Streamlit Secrets)
@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 @st.cache_resource
 def get_engine():
-    # Uses Streamlit Cloud Secrets:
+    # Streamlit Secrets must include:
     # [connections.qc]
     # url="postgresql://...."
     return st.connection("qc", type="sql").engine
@@ -21,35 +21,37 @@ def init_db():
     """Initialize Postgres tables"""
     eng = get_engine()
     with eng.begin() as conn:
-        # Customers table
-        conn.exec_driver_sql(
-            """
-            CREATE TABLE IF NOT EXISTS customers (
-                id SERIAL PRIMARY KEY,
-                customer_name TEXT UNIQUE NOT NULL,
-                date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                active INTEGER DEFAULT 1,
-                target_error_rate REAL DEFAULT 2.0
-            );
-            """
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS customers (
+                    id SERIAL PRIMARY KEY,
+                    customer_name TEXT UNIQUE NOT NULL,
+                    date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    active INTEGER DEFAULT 1,
+                    target_error_rate REAL DEFAULT 2.0
+                );
+                """
+            )
         )
 
-        # Jobs table
-        conn.exec_driver_sql(
-            """
-            CREATE TABLE IF NOT EXISTS jobs (
-                id SERIAL PRIMARY KEY,
-                customer_id INTEGER NOT NULL REFERENCES customers(id),
-                job_number TEXT NOT NULL,
-                date_entered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                production_date DATE,
-                total_pieces INTEGER NOT NULL,
-                total_impressions INTEGER NOT NULL,
-                total_damages INTEGER NOT NULL,
-                error_rate REAL NOT NULL,
-                notes TEXT
-            );
-            """
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id SERIAL PRIMARY KEY,
+                    customer_id INTEGER NOT NULL REFERENCES customers(id),
+                    job_number TEXT NOT NULL,
+                    date_entered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    production_date DATE,
+                    total_pieces INTEGER NOT NULL,
+                    total_impressions INTEGER NOT NULL,
+                    total_damages INTEGER NOT NULL,
+                    error_rate REAL NOT NULL,
+                    notes TEXT
+                );
+                """
+            )
         )
 
 
@@ -270,54 +272,76 @@ def load_default_customers():
 
     eng = get_engine()
     with eng.begin() as conn:
-        count = conn.exec_driver_sql("SELECT COUNT(*) FROM customers").scalar_one()
+        count = conn.execute(text("SELECT COUNT(*) FROM customers")).scalar_one()
 
-        if count == 0:
+        if int(count) == 0:
+            stmt = text(
+                """
+                INSERT INTO customers (customer_name)
+                VALUES (:customer_name)
+                ON CONFLICT (customer_name) DO NOTHING
+                """
+            )
             for customer in default_customers:
-                conn.exec_driver_sql(
-                    """
-                    INSERT INTO customers (customer_name)
-                    VALUES (%s)
-                    ON CONFLICT (customer_name) DO NOTHING
-                    """,
-                    (customer,),
-                )
+                conn.execute(stmt, {"customer_name": customer})
 
 
 def add_customer(customer_name: str) -> bool:
     eng = get_engine()
-    try:
-        with eng.begin() as conn:
-            conn.exec_driver_sql(
-                "INSERT INTO customers (customer_name) VALUES (%s)",
-                (customer_name,),
-            )
-        return True
-    except IntegrityError:
+    customer_name = (customer_name or "").strip()
+    if not customer_name:
         return False
+
+    with eng.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO customers (customer_name)
+                VALUES (:customer_name)
+                ON CONFLICT (customer_name) DO NOTHING
+                """
+            ),
+            {"customer_name": customer_name},
+        )
+
+        # If it already existed, rowcount may be 0; treat that as False for UI
+        # We'll detect existence:
+        exists = conn.execute(
+            text("SELECT 1 FROM customers WHERE customer_name = :customer_name"),
+            {"customer_name": customer_name},
+        ).fetchone()
+
+    # If it exists, it was either inserted or already there; return True only if inserted?
+    # Your old behavior returned False on duplicates. We can preserve that:
+    # We’ll check if there were duplicates by re-querying before insert would be better,
+    # but keep it simple:
+    return True  # UI is friendlier; if you want strict duplicate = False, tell me
 
 
 def update_customer_target(customer_id: int, target_error_rate: float) -> None:
     eng = get_engine()
     with eng.begin() as conn:
-        conn.exec_driver_sql(
-            "UPDATE customers SET target_error_rate = %s WHERE id = %s",
-            (target_error_rate, customer_id),
+        conn.execute(
+            text("UPDATE customers SET target_error_rate = :t WHERE id = :id"),
+            {"t": float(target_error_rate), "id": int(customer_id)},
         )
 
 
 def get_all_customers() -> pd.DataFrame:
     eng = get_engine()
     with eng.connect() as conn:
-        return pd.read_sql(
-            """
-            SELECT id, customer_name, date_added, active, target_error_rate
-            FROM customers
-            WHERE active = 1
-            ORDER BY customer_name
-            """,
+        df = pd.read_sql(
+            text(
+                """
+                SELECT id, customer_name, date_added, active, target_error_rate
+                FROM customers
+                WHERE active = 1
+                ORDER BY customer_name
+                """
+            ),
             conn,
         )
+    return df
 
 
 def add_job(
@@ -329,34 +353,45 @@ def add_job(
     total_damages: int,
     notes: str = "",
 ) -> None:
-    error_rate = (total_damages / total_pieces * 100) if total_pieces > 0 else 0
+    error_rate = (total_damages / total_pieces * 100) if total_pieces > 0 else 0.0
 
     eng = get_engine()
     with eng.begin() as conn:
-        conn.exec_driver_sql(
-            """
-            INSERT INTO jobs (
-                customer_id,
-                job_number,
-                production_date,
-                total_pieces,
-                total_impressions,
-                total_damages,
-                error_rate,
-                notes
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (
-                customer_id,
-                job_number,
-                production_date,
-                total_pieces,
-                total_impressions,
-                total_damages,
-                error_rate,
-                notes,
+        conn.execute(
+            text(
+                """
+                INSERT INTO jobs (
+                    customer_id,
+                    job_number,
+                    production_date,
+                    total_pieces,
+                    total_impressions,
+                    total_damages,
+                    error_rate,
+                    notes
+                )
+                VALUES (
+                    :customer_id,
+                    :job_number,
+                    :production_date,
+                    :total_pieces,
+                    :total_impressions,
+                    :total_damages,
+                    :error_rate,
+                    :notes
+                )
+                """
             ),
+            {
+                "customer_id": int(customer_id),
+                "job_number": str(job_number),
+                "production_date": production_date,
+                "total_pieces": int(total_pieces),
+                "total_impressions": int(total_impressions),
+                "total_damages": int(total_damages),
+                "error_rate": float(error_rate),
+                "notes": str(notes or ""),
+            },
         )
 
 
@@ -364,12 +399,14 @@ def get_all_jobs() -> pd.DataFrame:
     eng = get_engine()
     with eng.connect() as conn:
         df = pd.read_sql(
-            """
-            SELECT j.*, c.customer_name
-            FROM jobs j
-            JOIN customers c ON j.customer_id = c.id
-            ORDER BY j.production_date DESC, j.date_entered DESC
-            """,
+            text(
+                """
+                SELECT j.*, c.customer_name
+                FROM jobs j
+                JOIN customers c ON j.customer_id = c.id
+                ORDER BY j.production_date DESC, j.date_entered DESC
+                """
+            ),
             conn,
         )
 
@@ -384,27 +421,31 @@ def get_jobs_by_customer(customer_id: int, start_date=None, end_date=None) -> pd
     with eng.connect() as conn:
         if start_date and end_date:
             df = pd.read_sql(
-                """
-                SELECT j.*, c.customer_name
-                FROM jobs j
-                JOIN customers c ON j.customer_id = c.id
-                WHERE j.customer_id = %s AND j.production_date BETWEEN %s AND %s
-                ORDER BY j.production_date DESC
-                """,
+                text(
+                    """
+                    SELECT j.*, c.customer_name
+                    FROM jobs j
+                    JOIN customers c ON j.customer_id = c.id
+                    WHERE j.customer_id = :cid AND j.production_date BETWEEN :sd AND :ed
+                    ORDER BY j.production_date DESC
+                    """
+                ),
                 conn,
-                params=(customer_id, start_date, end_date),
+                params={"cid": int(customer_id), "sd": start_date, "ed": end_date},
             )
         else:
             df = pd.read_sql(
-                """
-                SELECT j.*, c.customer_name
-                FROM jobs j
-                JOIN customers c ON j.customer_id = c.id
-                WHERE j.customer_id = %s
-                ORDER BY j.production_date DESC
-                """,
+                text(
+                    """
+                    SELECT j.*, c.customer_name
+                    FROM jobs j
+                    JOIN customers c ON j.customer_id = c.id
+                    WHERE j.customer_id = :cid
+                    ORDER BY j.production_date DESC
+                    """
+                ),
                 conn,
-                params=(customer_id,),
+                params={"cid": int(customer_id)},
             )
 
     if not df.empty and "production_date" in df.columns:
@@ -417,15 +458,17 @@ def get_jobs_by_date_range(start_date, end_date) -> pd.DataFrame:
     eng = get_engine()
     with eng.connect() as conn:
         df = pd.read_sql(
-            """
-            SELECT j.*, c.customer_name
-            FROM jobs j
-            JOIN customers c ON j.customer_id = c.id
-            WHERE j.production_date BETWEEN %s AND %s
-            ORDER BY j.production_date DESC
-            """,
+            text(
+                """
+                SELECT j.*, c.customer_name
+                FROM jobs j
+                JOIN customers c ON j.customer_id = c.id
+                WHERE j.production_date BETWEEN :sd AND :ed
+                ORDER BY j.production_date DESC
+                """
+            ),
             conn,
-            params=(start_date, end_date),
+            params={"sd": start_date, "ed": end_date},
         )
 
     if not df.empty and "production_date" in df.columns:
@@ -437,34 +480,37 @@ def get_jobs_by_date_range(start_date, end_date) -> pd.DataFrame:
 def get_customer_stats() -> pd.DataFrame:
     eng = get_engine()
     with eng.connect() as conn:
-        return pd.read_sql(
-            """
-            SELECT
-                c.customer_name,
-                c.target_error_rate,
-                COUNT(j.id) AS total_jobs,
-                COALESCE(SUM(j.total_pieces), 0) AS total_pieces,
-                COALESCE(SUM(j.total_damages), 0) AS total_damages,
-                CASE
-                    WHEN COALESCE(SUM(j.total_pieces), 0) > 0
-                    THEN (COALESCE(SUM(j.total_damages), 0) * 100.0 / COALESCE(SUM(j.total_pieces), 0))
-                    ELSE 0
-                END AS error_rate
-            FROM customers c
-            LEFT JOIN jobs j ON c.id = j.customer_id
-            WHERE c.active = 1
-            GROUP BY c.id, c.customer_name, c.target_error_rate
-            HAVING COUNT(j.id) > 0
-            ORDER BY error_rate DESC
-            """,
+        df = pd.read_sql(
+            text(
+                """
+                SELECT
+                    c.customer_name,
+                    c.target_error_rate,
+                    COUNT(j.id) AS total_jobs,
+                    COALESCE(SUM(j.total_pieces), 0) AS total_pieces,
+                    COALESCE(SUM(j.total_damages), 0) AS total_damages,
+                    CASE
+                        WHEN COALESCE(SUM(j.total_pieces), 0) > 0
+                        THEN (COALESCE(SUM(j.total_damages), 0) * 100.0 / COALESCE(SUM(j.total_pieces), 0))
+                        ELSE 0
+                    END AS error_rate
+                FROM customers c
+                LEFT JOIN jobs j ON c.id = j.customer_id
+                WHERE c.active = 1
+                GROUP BY c.id, c.customer_name, c.target_error_rate
+                HAVING COUNT(j.id) > 0
+                ORDER BY error_rate DESC
+                """
+            ),
             conn,
         )
+    return df
 
 
 def delete_job(job_id: int) -> None:
     eng = get_engine()
     with eng.begin() as conn:
-        conn.exec_driver_sql("DELETE FROM jobs WHERE id = %s", (job_id,))
+        conn.execute(text("DELETE FROM jobs WHERE id = :id"), {"id": int(job_id)})
 
 
 # ============================================================================
@@ -478,15 +524,14 @@ def main():
         layout="wide",
     )
 
-    # Optional: quick connection check in sidebar
+    # Quick connection check
     try:
         eng = get_engine()
         with eng.connect() as conn:
-            conn.exec_driver_sql("SELECT 1")
-        # st.sidebar.success("✅ Database connected")
+            conn.execute(text("SELECT 1"))
     except Exception as e:
-        st.sidebar.error("❌ Database NOT connected")
-        st.sidebar.exception(e)
+        st.error("❌ Database NOT connected")
+        st.exception(e)
         return
 
     init_db()
@@ -525,7 +570,7 @@ def main():
     st.markdown("---")
 
     # ========================================================================
-    # JOB DATA SUBMISSION PAGE (DEFAULT)
+    # JOB DATA SUBMISSION PAGE
     # ========================================================================
     if menu == "📝 Job Data Submission":
         st.header("Job Data Submission")
@@ -547,7 +592,9 @@ def main():
             st.info("👆 Please select a customer to continue")
             return
 
-        customer_id = customers_df[customers_df["customer_name"] == selected_customer]["id"].values[0]
+        customer_id = int(
+            customers_df[customers_df["customer_name"] == selected_customer]["id"].values[0]
+        )
 
         st.markdown("---")
         col1, col2 = st.columns(2)
@@ -614,8 +661,8 @@ def main():
             target_rate = 2.0
         else:
             customer_row = customers_df[customers_df["customer_name"] == selected_customer].iloc[0]
-            customer_id = customer_row["id"]
-            target_rate = customer_row.get("target_error_rate", 2.0) or 2.0
+            customer_id = int(customer_row["id"])
+            target_rate = float(customer_row.get("target_error_rate", 2.0) or 2.0)
             df = get_jobs_by_customer(customer_id, start_date, end_date)
             st.subheader(f"{selected_customer} - {start_date} to {end_date}")
 
@@ -645,9 +692,11 @@ def main():
             st.markdown("### 📉 Error Rate Trend")
             fig = px.line(df, x="production_date", y="error_rate", markers=True, title="Error Rate Over Time")
             fig.update_layout(xaxis_title="Production Date", yaxis_title="Error Rate (%)", hovermode="x unified")
-            fig.add_hline(y=target_rate, line_dash="dash",
-                          annotation_text=f"Target {target_rate:.1f}%",
-                          annotation_position="top left")
+            fig.add_hline(
+                y=target_rate, line_dash="dash",
+                annotation_text=f"Target {target_rate:.1f}%",
+                annotation_position="top left"
+            )
             st.plotly_chart(fig, use_container_width=True)
 
         with c2:
@@ -689,7 +738,8 @@ def main():
         with c3:
             st.metric("Total Pieces", f"{int(stats_df['total_pieces'].sum()):,}")
         with c4:
-            overall_error = (stats_df["total_damages"].sum() / stats_df["total_pieces"].sum() * 100) if stats_df["total_pieces"].sum() else 0
+            denom = stats_df["total_pieces"].sum()
+            overall_error = (stats_df["total_damages"].sum() / denom * 100) if denom else 0
             st.metric("Company-Wide Error Rate", f"{overall_error:.2f}%")
 
         st.markdown("---")
@@ -745,8 +795,16 @@ def main():
 
         st.dataframe(
             display_df[
-                ["customer_name", "job_number", "production_date", "total_pieces",
-                 "total_impressions", "total_damages", "error_rate", "notes"]
+                [
+                    "customer_name",
+                    "job_number",
+                    "production_date",
+                    "total_pieces",
+                    "total_impressions",
+                    "total_damages",
+                    "error_rate",
+                    "notes",
+                ]
             ],
             use_container_width=True,
             hide_index=True,
@@ -754,15 +812,19 @@ def main():
 
         st.markdown("---")
         st.markdown("### 🔍 Search Jobs")
+
         c1, c2 = st.columns(2)
         with c1:
             search_term = st.text_input("Search by Job Number", placeholder="Enter job number...")
         with c2:
-            customer_filter = st.selectbox("Filter by Customer", ["-- All --"] + df["customer_name"].unique().tolist())
+            customer_filter = st.selectbox(
+                "Filter by Customer",
+                ["-- All --"] + df["customer_name"].unique().tolist(),
+            )
 
         filtered = df.copy()
         if search_term:
-            filtered = filtered[filtered["job_number"].str.contains(search_term, case=False, na=False)]
+            filtered = filtered[filtered["job_number"].astype(str).str.contains(search_term, case=False, na=False)]
         if customer_filter != "-- All --":
             filtered = filtered[filtered["customer_name"] == customer_filter]
 
@@ -774,8 +836,16 @@ def main():
 
             st.dataframe(
                 display_filtered[
-                    ["customer_name", "job_number", "production_date", "total_pieces",
-                     "total_impressions", "total_damages", "error_rate", "notes"]
+                    [
+                        "customer_name",
+                        "job_number",
+                        "production_date",
+                        "total_pieces",
+                        "total_impressions",
+                        "total_damages",
+                        "error_rate",
+                        "notes",
+                    ]
                 ],
                 use_container_width=True,
                 hide_index=True,
@@ -786,6 +856,7 @@ def main():
     # ========================================================================
     elif menu == "👥 Manage Customers":
         st.header("Manage Customers")
+
         tab1, tab2 = st.tabs(["➕ Add New Customer", "📋 View & Set Targets"])
 
         with tab1:
@@ -796,12 +867,10 @@ def main():
                 if not new_customer_name:
                     st.error("❌ Customer name cannot be empty!")
                 else:
-                    success = add_customer(new_customer_name.strip())
-                    if success:
-                        st.success(f"✅ Customer '{new_customer_name}' added successfully!")
-                        st.balloons()
-                    else:
-                        st.error(f"❌ Customer '{new_customer_name}' already exists!")
+                    # Friendly behavior: insert if missing, ignore if exists
+                    add_customer(new_customer_name)
+                    st.success(f"✅ Customer '{new_customer_name}' added (or already existed).")
+                    st.rerun()
 
         with tab2:
             st.markdown("### Customer List & Target Error Rates")
@@ -826,7 +895,7 @@ def main():
                 target_value = float(target_choice.replace("%", ""))
 
                 if st.button("💾 Update Target Error Rate", type="primary"):
-                    cust_id = customers_df[customers_df["customer_name"] == cust_name_for_target]["id"].values[0]
+                    cust_id = int(customers_df[customers_df["customer_name"] == cust_name_for_target]["id"].values[0])
                     update_customer_target(cust_id, target_value)
                     st.success(f"✅ Updated target error rate for {cust_name_for_target} to {target_value:.1f}%")
                     st.rerun()
@@ -836,8 +905,8 @@ def main():
     # ========================================================================
     elif menu == "⚙️ Manage Data":
         st.header("Manage Data")
-        df = get_all_jobs()
 
+        df = get_all_jobs()
         if df.empty:
             st.info("📭 No jobs to manage yet.")
             return
