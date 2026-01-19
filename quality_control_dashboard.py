@@ -637,6 +637,7 @@ def main():
                     f"✅ Job {job_number} for {selected_customer} saved successfully!"
                 )
                 st.balloons()
+                st.rerun()  # Refresh to show new data
 
     # ========================================================================
     # CUSTOMER ANALYTICS
