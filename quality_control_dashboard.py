@@ -566,6 +566,11 @@ def main():
     if menu == "📝 Job Data Submission":
         st.header("Job Data Submission")
 
+        # Display success message if job was just saved
+        if "job_saved" in st.session_state:
+            st.success(st.session_state["job_saved"])
+            del st.session_state["job_saved"]  # Clear the message
+
         customers_df = get_all_customers()
         customer_options = customers_df["customer_name"].tolist()
         
@@ -633,11 +638,9 @@ def main():
                     total_damages,
                     notes,
                 )
-                st.success(
-                    f"✅ Job {job_number} for {selected_customer} saved successfully!"
-                )
-                st.balloons()
-                st.rerun()  # Refresh to show new data
+                # Store success message in session state
+                st.session_state["job_saved"] = f"✅ Job {job_number} for {selected_customer} saved successfully!"
+                st.rerun()
 
     # ========================================================================
     # CUSTOMER ANALYTICS
