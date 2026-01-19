@@ -11,9 +11,8 @@ import plotly.graph_objects as go
 # DATABASE SETUP - PostgreSQL (Neon)
 # ============================================================================
 
-@st.cache_resource
 def get_connection():
-    """Create a connection to PostgreSQL database using Streamlit secrets"""
+    """Create a fresh connection to PostgreSQL database using Streamlit secrets"""
     try:
         conn = psycopg2.connect(
             host=st.secrets["neon"]["host"],
@@ -31,44 +30,48 @@ def get_connection():
 
 def init_db():
     """Initialize PostgreSQL database with jobs and customers tables"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    # Customers table
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS customers (
-            id SERIAL PRIMARY KEY,
-            customer_name TEXT UNIQUE NOT NULL,
-            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            active INTEGER DEFAULT 1,
-            target_error_rate REAL DEFAULT 2.0
+        # Customers table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS customers (
+                id SERIAL PRIMARY KEY,
+                customer_name TEXT UNIQUE NOT NULL,
+                date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                active INTEGER DEFAULT 1,
+                target_error_rate REAL DEFAULT 2.0
+            )
+            """
         )
-        """
-    )
 
-    # Jobs table
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS jobs (
-            id SERIAL PRIMARY KEY,
-            customer_id INTEGER NOT NULL,
-            job_number TEXT NOT NULL,
-            date_entered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            production_date DATE,
-            total_pieces INTEGER NOT NULL,
-            total_impressions INTEGER NOT NULL,
-            total_damages INTEGER NOT NULL,
-            error_rate REAL NOT NULL,
-            notes TEXT,
-            FOREIGN KEY (customer_id) REFERENCES customers (id)
+        # Jobs table
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS jobs (
+                id SERIAL PRIMARY KEY,
+                customer_id INTEGER NOT NULL,
+                job_number TEXT NOT NULL,
+                date_entered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                production_date DATE,
+                total_pieces INTEGER NOT NULL,
+                total_impressions INTEGER NOT NULL,
+                total_damages INTEGER NOT NULL,
+                error_rate REAL NOT NULL,
+                notes TEXT,
+                FOREIGN KEY (customer_id) REFERENCES customers (id)
+            )
+            """
         )
-        """
-    )
 
-    conn.commit()
-    cursor.close()
-    conn.close()
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Failed to initialize database: {e}")
+        st.stop()
 
 
 def load_default_customers():
@@ -282,28 +285,31 @@ def load_default_customers():
         "Zee Medical",
     ]
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    # Check if customers table is empty
-    cursor.execute("SELECT COUNT(*) FROM customers")
-    count = cursor.fetchone()[0]
+        # Check if customers table is empty
+        cursor.execute("SELECT COUNT(*) FROM customers")
+        count = cursor.fetchone()[0]
 
-    if count == 0:
-        for customer in default_customers:
-            try:
-                cursor.execute(
-                    "INSERT INTO customers (customer_name) VALUES (%s)",
-                    (customer,)
-                )
-            except psycopg2.IntegrityError:
-                conn.rollback()
-                continue
+        if count == 0:
+            for customer in default_customers:
+                try:
+                    cursor.execute(
+                        "INSERT INTO customers (customer_name) VALUES (%s)",
+                        (customer,)
+                    )
+                    conn.commit()
+                except psycopg2.IntegrityError:
+                    conn.rollback()
+                    continue
 
-        conn.commit()
-
-    cursor.close()
-    conn.close()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        st.error(f"Failed to load default customers: {e}")
+        # Don't stop the app, just log the error
 
 
 # ============================================================================
