@@ -10,7 +10,8 @@ from pathlib import Path
 # DATABASE SETUP
 # ============================================================================
 
-DB_PATH = Path(__file__).parent / "quality_control.db"
+# Use absolute path to ensure database consistency across reruns
+DB_PATH = Path.cwd() / "quality_control.db"
 
 
 def init_db():
