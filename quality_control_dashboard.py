@@ -1,29 +1,57 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import RealDictCursor
 from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
-from pathlib import Path
 
 # ============================================================================
-# DATABASE SETUP
+# DATABASE SETUP - PostgreSQL (Neon)
 # ============================================================================
 
-# Use absolute path to ensure database consistency across reruns
-DB_PATH = Path.cwd() / "quality_control.db"
+@st.cache_resource
+def get_connection():
+    """Create a connection to PostgreSQL database using Streamlit secrets"""
+    try:
+        conn = psycopg2.connect(
+            host=st.secrets["neon"]["host"],
+            database=st.secrets["neon"]["database"],
+            user=st.secrets["neon"]["user"],
+            password=st.secrets["neon"]["password"],
+            port=st.secrets["neon"].get("port", 5432),
+            sslmode=st.secrets["neon"].get("sslmode", "require")
+        )
+        return conn
+    except Exception as e:
+        st.error(f"Database connection failed: {e}")
+        st.stop()
 
 
 def init_db():
-    """Initialize SQLite database with jobs and customers tables"""
-    conn = sqlite3.connect(DB_PATH)
+    """Initialize PostgreSQL database with jobs and customers tables"""
+    conn = get_connection()
     cursor = conn.cursor()
+
+    # Customers table
+    cursor.execute(
+        """
+        CREATE TABLE IF NOT EXISTS customers (
+            id SERIAL PRIMARY KEY,
+            customer_name TEXT UNIQUE NOT NULL,
+            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            active INTEGER DEFAULT 1,
+            target_error_rate REAL DEFAULT 2.0
+        )
+        """
+    )
 
     # Jobs table
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS jobs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             customer_id INTEGER NOT NULL,
             job_number TEXT NOT NULL,
             date_entered TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -38,28 +66,8 @@ def init_db():
         """
     )
 
-    # Customers table (include target_error_rate for new DBs)
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS customers (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            customer_name TEXT UNIQUE NOT NULL,
-            date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            active INTEGER DEFAULT 1,
-            target_error_rate REAL DEFAULT 2.0
-        )
-        """
-    )
-
-    # Ensure target_error_rate column exists for older DBs
-    cursor.execute("PRAGMA table_info(customers)")
-    cols = [row[1] for row in cursor.fetchall()]
-    if "target_error_rate" not in cols:
-        cursor.execute(
-            "ALTER TABLE customers ADD COLUMN target_error_rate REAL DEFAULT 2.0"
-        )
-
     conn.commit()
+    cursor.close()
     conn.close()
 
 
@@ -244,41 +252,37 @@ def load_default_customers():
         "Swagoo Promotions",
         "Swizzle",
         "SynergyX1 LLC",
-        "Tahoe Basics",
-        "Tahoe LogoWear",
-        "Teamworks",
-        "Tee Shirt Bar",
-        "The Graphics Factory",
-        "The Hat Source",
-        "The Right Promotions",
-        "The Sourcing Group, LLC",
-        "The Sourcing Group Promo",
-        "Thunder House Productions LLC",
-        "TPG Trade Show & Events",
-        "Treasure Mountain",
-        "Triangle Design & Graphics LLC",
-        "TR Miller",
-        "TRSTY Media",
-        "Truly Gifted",
-        "Tugboat, Inc",
-        "University of Nevada Equipment Room",
-        "Unraveled Threads",
-        "Upper Park Clothing",
-        "UP Shirt Inc",
-        "Vail Dunlap",
-        "Washoe County",
-        "Washoe Schools",
-        "Way to Be Designs, LLC",
-        "WearyLand",
-        "Windy City Promos",
-        "Wolfgangs",
-        "W&T Graphix",
-        "Xcel",
-        "YanceyWorks LLC",
-        "Zazzle",
+        "Tahoe Blue Sportswear",
+        "Tamco Marketing Corporation",
+        "Team Fitz Graphics, Inc.",
+        "Team Sportswear",
+        "Tenacious G LLC",
+        "That's A Wrap Events IPU",
+        "The Chappell Consulting Group",
+        "The Geek",
+        "The Image Boutique",
+        "The Shirt Source",
+        "Thread Logic",
+        "Totally Promotional",
+        "Traditions Screen Printing",
+        "Twin Palm Promotional Products",
+        "Tyler Wayne Designs",
+        "Uniform Authority",
+        "United Branding Consultants",
+        "US Shirt",
+        "Vagrant International Inc",
+        "Vantage Apparel",
+        "Virgin Valley Athletics",
+        "Visualogic Proforma",
+        "Wicked Printing",
+        "Wolfpack",
+        "Work Lab International",
+        "Work Wearhouse, Inc.",
+        "X-Grain Co",
+        "Zee Medical",
     ]
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
 
     # Check if customers table is empty
@@ -287,50 +291,52 @@ def load_default_customers():
 
     if count == 0:
         for customer in default_customers:
-            cursor.execute(
-                "INSERT OR IGNORE INTO customers (customer_name) VALUES (?)",
-                (customer,),
-            )
+            try:
+                cursor.execute(
+                    "INSERT INTO customers (customer_name) VALUES (%s)",
+                    (customer,)
+                )
+            except psycopg2.IntegrityError:
+                conn.rollback()
+                continue
+
         conn.commit()
 
+    cursor.close()
     conn.close()
 
 
+# ============================================================================
+# DATABASE OPERATIONS
+# ============================================================================
+
 def add_customer(customer_name: str) -> bool:
-    """Add a new customer"""
-    conn = sqlite3.connect(DB_PATH)
+    """Add a new customer to the database"""
+    conn = get_connection()
     cursor = conn.cursor()
 
     try:
         cursor.execute(
-            "INSERT INTO customers (customer_name) VALUES (?)", (customer_name,)
+            "INSERT INTO customers (customer_name) VALUES (%s)",
+            (customer_name,)
         )
         conn.commit()
+        cursor.close()
         conn.close()
         return True
-    except sqlite3.IntegrityError:
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        cursor.close()
         conn.close()
         return False
 
 
-def update_customer_target(customer_id: int, target_error_rate: float) -> None:
-    """Update target error rate for a customer"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "UPDATE customers SET target_error_rate = ? WHERE id = ?",
-        (target_error_rate, customer_id),
-    )
-    conn.commit()
-    conn.close()
-
-
 def get_all_customers() -> pd.DataFrame:
-    """Get all active customers"""
-    conn = sqlite3.connect(DB_PATH)
+    """Retrieve all active customers"""
+    conn = get_connection()
     df = pd.read_sql_query(
         """
-        SELECT id, customer_name, date_added, active, target_error_rate
+        SELECT id, customer_name, date_added, target_error_rate
         FROM customers
         WHERE active = 1
         ORDER BY customer_name
@@ -339,6 +345,21 @@ def get_all_customers() -> pd.DataFrame:
     )
     conn.close()
     return df
+
+
+def update_customer_target(customer_id: int, target_rate: float) -> None:
+    """Update target error rate for a customer"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "UPDATE customers SET target_error_rate = %s WHERE id = %s",
+        (target_rate, customer_id),
+    )
+
+    conn.commit()
+    cursor.close()
+    conn.close()
 
 
 def add_job(
@@ -353,7 +374,7 @@ def add_job(
     """Add a new job to the database"""
     error_rate = (total_damages / total_pieces * 100) if total_pieces > 0 else 0
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute(
@@ -368,7 +389,7 @@ def add_job(
             error_rate,
             notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         """,
         (
             customer_id,
@@ -383,12 +404,13 @@ def add_job(
     )
 
     conn.commit()
+    cursor.close()
     conn.close()
 
 
 def get_all_jobs() -> pd.DataFrame:
     """Retrieve all jobs with customer names"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     df = pd.read_sql_query(
         """
         SELECT j.*, c.customer_name
@@ -410,7 +432,7 @@ def get_jobs_by_customer(
     customer_id: int, start_date=None, end_date=None
 ) -> pd.DataFrame:
     """Get jobs for a specific customer, optionally filtered by date range"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
 
     if start_date and end_date:
         df = pd.read_sql_query(
@@ -418,7 +440,7 @@ def get_jobs_by_customer(
             SELECT j.*, c.customer_name
             FROM jobs j
             JOIN customers c ON j.customer_id = c.id
-            WHERE j.customer_id = ? AND j.production_date BETWEEN ? AND ?
+            WHERE j.customer_id = %s AND j.production_date BETWEEN %s AND %s
             ORDER BY j.production_date DESC
             """,
             conn,
@@ -430,7 +452,7 @@ def get_jobs_by_customer(
             SELECT j.*, c.customer_name
             FROM jobs j
             JOIN customers c ON j.customer_id = c.id
-            WHERE j.customer_id = ?
+            WHERE j.customer_id = %s
             ORDER BY j.production_date DESC
             """,
             conn,
@@ -447,13 +469,13 @@ def get_jobs_by_customer(
 
 def get_jobs_by_date_range(start_date, end_date) -> pd.DataFrame:
     """Get all jobs within a date range"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     df = pd.read_sql_query(
         """
         SELECT j.*, c.customer_name
         FROM jobs j
         JOIN customers c ON j.customer_id = c.id
-        WHERE j.production_date BETWEEN ? AND ?
+        WHERE j.production_date BETWEEN %s AND %s
         ORDER BY j.production_date DESC
         """,
         conn,
@@ -469,7 +491,7 @@ def get_jobs_by_date_range(start_date, end_date) -> pd.DataFrame:
 
 def get_customer_stats() -> pd.DataFrame:
     """Get error rate statistics by customer"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     df = pd.read_sql_query(
         """
         SELECT
@@ -487,7 +509,7 @@ def get_customer_stats() -> pd.DataFrame:
         LEFT JOIN jobs j ON c.id = j.customer_id
         WHERE c.active = 1
         GROUP BY c.id, c.customer_name, c.target_error_rate
-        HAVING total_jobs > 0
+        HAVING COUNT(j.id) > 0
         ORDER BY error_rate DESC
         """,
         conn,
@@ -498,10 +520,13 @@ def get_customer_stats() -> pd.DataFrame:
 
 def delete_job(job_id: int) -> None:
     """Delete a job"""
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+
+    cursor.execute("DELETE FROM jobs WHERE id = %s", (job_id,))
+
     conn.commit()
+    cursor.close()
     conn.close()
 
 
@@ -509,34 +534,31 @@ def delete_job(job_id: int) -> None:
 # STREAMLIT APP
 # ============================================================================
 
-
 def main():
     st.set_page_config(
         page_title="Screenprint QC Dashboard",
-        page_icon="📊",
+        page_icon="🎨",
         layout="wide",
+        initial_sidebar_state="expanded",
     )
 
-    # Initialize database and load default customers
+    # Initialize database and load default customers on first run
     init_db()
     load_default_customers()
 
-    # ------------------------------------------------------------------------
-    # SIDEBAR with Logo at Top and Radio Navigation
-    # ------------------------------------------------------------------------
+    # ========================================================================
+    # SIDEBAR & BRANDING
+    # ========================================================================
     with st.sidebar:
-        # Logo at top of sidebar (full width)
-        try:
-            st.image("silverscreen_logo.png", use_column_width=True)
-        except Exception:
-            st.markdown("### 🎨 SilverScreen")
-        
+        st.image(
+            "https://www.silverscreenprinting.com/wp-content/uploads/2023/03/SilverScreen-Logo-Blue-White-Transparent-400x120.png",
+            width=250,
+        )
         st.markdown("---")
-        
-        # Navigation as radio buttons (all visible)
-        st.markdown("### Navigation")
+
+        st.title("Navigation")
         menu = st.radio(
-            "",
+            "Go to",
             [
                 "📝 Job Data Submission",
                 "📈 Customer Analytics",
@@ -545,20 +567,11 @@ def main():
                 "👥 Manage Customers",
                 "⚙️ Manage Data",
             ],
-            label_visibility="collapsed"
+            label_visibility="collapsed",
         )
 
-    # ------------------------------------------------------------------------
-    # Main Header (Simple and Clean)
-    # ------------------------------------------------------------------------
-    st.markdown(
-        "<h1 style='text-align:center;'>Screenprint QC Dashboard</h1>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<p style='text-align:center; font-size:14px; color:gray;'>Silverscreen Decoration & Fulfillment®</p>",
-        unsafe_allow_html=True,
-    )
+    st.title("Screenprint QC Dashboard")
+    st.caption("Silverscreen Decoration & Fulfillment®")
     st.markdown("---")
 
     # ========================================================================
@@ -758,26 +771,38 @@ def main():
                 )
             )
             fig.update_layout(
-                title="Pieces vs Damages by Job",
                 xaxis_title="Job Number",
                 yaxis_title="Count",
-                barmode="group",
+                barmode="overlay",
+                hovermode="x unified",
             )
             st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
-        csv = df.to_csv(index=False)
+        st.markdown("### 📋 Job Details")
 
-        if selected_customer == "-- All Customers --":
-            safe_name = "all_customers"
-        else:
-            safe_name = selected_customer.replace(" ", "_")
+        display_df = df.copy()
+        display_df["error_rate"] = display_df["error_rate"].apply(
+            lambda x: f"{x:.2f}%"
+        )
+        display_df["production_date"] = display_df["production_date"].dt.strftime(
+            "%Y-%m-%d"
+        )
 
-        st.download_button(
-            label="📊 Download Report (CSV)",
-            data=csv,
-            file_name=f"qc_report_{safe_name}_{start_date}_{end_date}.csv",
-            mime="text/csv",
+        st.dataframe(
+            display_df[
+                [
+                    "job_number",
+                    "production_date",
+                    "total_pieces",
+                    "total_impressions",
+                    "total_damages",
+                    "error_rate",
+                    "notes",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
         )
 
     # ========================================================================
@@ -855,6 +880,7 @@ def main():
             fig.update_xaxes(tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
 
+        st.markdown("---")
         st.markdown("### 📋 All Customer Statistics")
 
         display_df = stats_df.copy()
@@ -1000,7 +1026,6 @@ def main():
                         st.success(
                             f"✅ Customer '{new_customer_name}' added successfully!"
                         )
-                        st.balloons()
                     else:
                         st.error(
                             f"❌ Customer '{new_customer_name}' already exists!"
