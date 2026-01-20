@@ -304,18 +304,12 @@ def add_customer(customer_name: str) -> bool:
             {"customer_name": customer_name},
         )
 
-        # If it already existed, rowcount may be 0; treat that as False for UI
-        # We'll detect existence:
         exists = conn.execute(
             text("SELECT 1 FROM customers WHERE customer_name = :customer_name"),
             {"customer_name": customer_name},
         ).fetchone()
 
-    # If it exists, it was either inserted or already there; return True only if inserted?
-    # Your old behavior returned False on duplicates. We can preserve that:
-    # We’ll check if there were duplicates by re-querying before insert would be better,
-    # but keep it simple:
-    return True  # UI is friendlier; if you want strict duplicate = False, tell me
+    return True
 
 
 def update_customer_target(customer_id: int, target_error_rate: float) -> None:
@@ -531,25 +525,17 @@ def main():
     )
 
     # --------------------------------------------------------------------
-    # Global UI tweaks: tighter metric cards / spacing so everything fits
+    # Global UI tweaks
     # --------------------------------------------------------------------
     st.markdown(
         """
         <style>
-        /* Reduce vertical padding in main blocks */
         div.block-container { padding-top: 1rem; padding-bottom: 1.25rem; }
-
-        /* Make metric cards smaller */
-        [data-testid="metric-container"] {
-            padding: 10px 12px;
-            border-radius: 12px;
-        }
+        [data-testid="metric-container"] { padding: 10px 12px; border-radius: 12px; }
         [data-testid="metric-container"] > div { gap: 0.25rem; }
         [data-testid="stMetricLabel"] { font-size: 0.85rem; }
         [data-testid="stMetricValue"] { font-size: 1.75rem; }
         [data-testid="stMetricDelta"] { font-size: 0.85rem; }
-
-        /* Tighten section spacing */
         h2, h3 { margin-top: 0.75rem; }
         </style>
         """,
@@ -640,7 +626,6 @@ def main():
         with col2:
             total_damages = st.number_input("Total Damages *", min_value=0, step=1)
 
-            # Show both rates (legacy per pieces + new per impressions)
             m1, m2 = st.columns(2)
             with m1:
                 if total_pieces > 0:
@@ -714,10 +699,8 @@ def main():
             st.warning("📭 No jobs found for this selection.")
             return
 
-        # ----------------------------------------------------------------
-        # Derived metrics
-        # ----------------------------------------------------------------
         df = df.copy()
+
         df["damages_per_1000_impressions"] = df.apply(
             lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 1000.0)
             if float(r.get("total_impressions", 0) or 0) > 0
@@ -725,7 +708,6 @@ def main():
             axis=1,
         )
 
-        # Toggle: what the charts show (legacy per pieces vs new per impressions)
         rate_basis = st.radio(
             "Error rate basis",
             ["Per Impressions (recommended)", "Per Pieces (legacy)"],
@@ -734,9 +716,7 @@ def main():
         rate_col = "error_rate_impressions" if rate_basis.startswith("Per Impressions") else "error_rate"
         rate_label = "Error Rate (% of impressions)" if rate_col == "error_rate_impressions" else "Error Rate (% of pieces)"
 
-        # ----------------------------------------------------------------
-        # KPIs (tighter layout: 3 on top, 2 below)
-        # ----------------------------------------------------------------
+        # KPIs
         st.markdown("### 📊 Key Performance Metrics")
         top1, top2, top3 = st.columns(3)
         bot1, bot2 = st.columns(2)
@@ -760,21 +740,17 @@ def main():
                 if rate_col == "error_rate_impressions" and total_impressions > 0
                 else ((total_damages / total_pieces) * 100 if total_pieces > 0 else 0)
             )
-            st.metric(f"Error Rate ({'Impressions' if rate_col == 'error_rate_impressions' else 'Pieces'})", f"{overall_rate:.2f}%")
+            st.metric(
+                f"Error Rate ({'Impressions' if rate_col == 'error_rate_impressions' else 'Pieces'})",
+                f"{overall_rate:.2f}%"
+            )
 
         st.caption(
             f"Target error rate: {target_rate:.1f}% (this target was originally set per pieces; you can still use it as a benchmark when viewing per impressions)"
         )
         st.markdown("---")
 
-        # ----------------------------------------------------------------
-        # Visuals (Month-based)
-        # - Use production_month on x-axis for ALL charts
-        # - Hover shows job number
-        # - Scatter dots are consistent size (no giant bubbles)
-        # ----------------------------------------------------------------
-
-        # Make sure we have the impressions-based rate available for visuals
+        # Ensure impressions-based rate exists
         df["error_rate_impressions"] = df.apply(
             lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 100.0)
             if float(r.get("total_impressions", 0) or 0) > 0
@@ -786,7 +762,6 @@ def main():
         df = df.dropna(subset=["production_date"]).copy()
         df["production_month"] = df["production_date"].dt.to_period("M").dt.to_timestamp()
 
-        # Monthly rollup for the trend line so it never looks blank
         monthly = (
             df.groupby("production_month", as_index=False)
             .agg(
@@ -810,12 +785,9 @@ def main():
             else 0.0,
             axis=1,
         )
-        monthly["damages_per_1000_impressions"] = monthly.apply(
-            lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 1000.0)
-            if float(r.get("total_impressions", 0) or 0) > 0
-            else 0.0,
-            axis=1,
-        )
+
+        # NEW: stacked bar components
+        monthly["good_pieces"] = (monthly["total_pieces"] - monthly["total_damages"]).clip(lower=0)
 
         left, right = st.columns(2)
 
@@ -835,7 +807,6 @@ def main():
                     "total_damages": True,
                 },
             )
-            # slightly bigger markers so the chart reads even with few points
             fig.update_traces(marker=dict(size=10))
             fig.update_layout(
                 xaxis_title="Production Month",
@@ -853,37 +824,43 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
 
         with right:
-            st.markdown("### 🎯 Damages per 1,000 Impressions (by Job)")
+            st.markdown("### 🧱 Production vs Damages (Stacked by Month)")
 
-            fig = px.scatter(
-                df.sort_values("production_date"),
-                x="production_month",
-                y="damages_per_1000_impressions",
-                hover_name="job_number",
-                hover_data={
-                    "customer_name": True,
-                    "total_pieces": True,
-                    "total_impressions": True,
-                    "total_damages": True,
-                    "production_date": True,
-                },
-                title=None,
+            fig = go.Figure()
+
+            # Bottom: Damages (Red)
+            fig.add_bar(
+                x=monthly["production_month"],
+                y=monthly["total_damages"],
+                name="Damaged Pieces",
+                marker_color="#d62728",
+                hovertemplate="%{y:,} damaged<extra></extra>",
             )
-            # consistent dot sizes (no size= column)
-            fig.update_traces(marker=dict(size=10, opacity=0.85))
+
+            # Top: Good pieces (Blue)
+            fig.add_bar(
+                x=monthly["production_month"],
+                y=monthly["good_pieces"],
+                name="Good Pieces",
+                marker_color="#1f77b4",
+                hovertemplate="%{y:,} good<extra></extra>",
+            )
+
             fig.update_layout(
+                barmode="stack",
                 xaxis_title="Production Month",
-                yaxis_title="Damages per 1,000 Impressions",
+                yaxis_title="Total Pieces",
+                hovermode="x unified",
                 margin=dict(l=10, r=10, t=10, b=10),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             )
             fig.update_xaxes(dtick="M1", tickformat="%b %Y")
+
             st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
 
-        st.markdown("---")
         csv = df.to_csv(index=False)
-
         safe_name = "all_customers" if selected_customer == "-- All Customers --" else selected_customer.replace(" ", "_")
         st.download_button(
             label="📊 Download Report (CSV)",
@@ -898,21 +875,82 @@ def main():
     elif menu == "🏢 All Customers Overview":
         st.header("Customer Quality Overview")
 
+        # NEW: Date range for "All Customers Overview" (so trendline/scatter are meaningful)
+        cA, cB, cC = st.columns([2, 2, 1])
+        with cA:
+            start_date = st.date_input("Start Date", value=datetime.today() - timedelta(days=90), key="all_overview_start")
+        with cB:
+            end_date = st.date_input("End Date", value=datetime.today(), key="all_overview_end")
+        with cC:
+            if st.button("🔄 Refresh", use_container_width=True, key="all_overview_refresh"):
+                st.rerun()
+
         stats_df = get_customer_stats()
         if stats_df.empty:
             st.info("📭 No job data available yet.")
             return
 
-        # Toggle (keep legacy available)
+        # Pull job-level data for the trendline + scatter (all customers, date filtered)
+        jobs_df = get_jobs_by_date_range(start_date, end_date)
+        if jobs_df.empty:
+            st.warning("📭 No jobs found for this date range.")
+            return
+
+        # Derived fields for overview charts
+        jobs_df = jobs_df.copy()
+        jobs_df["production_date"] = pd.to_datetime(jobs_df["production_date"], errors="coerce")
+        jobs_df = jobs_df.dropna(subset=["production_date"]).copy()
+        jobs_df["production_month"] = jobs_df["production_date"].dt.to_period("M").dt.to_timestamp()
+
+        jobs_df["damages_per_1000_impressions"] = jobs_df.apply(
+            lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 1000.0)
+            if float(r.get("total_impressions", 0) or 0) > 0
+            else 0.0,
+            axis=1,
+        )
+
+        jobs_df["error_rate_impressions"] = jobs_df.apply(
+            lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 100.0)
+            if float(r.get("total_impressions", 0) or 0) > 0
+            else 0.0,
+            axis=1,
+        )
+
+        # Monthly rollup for ALL customers trend
+        monthly_all = (
+            jobs_df.groupby("production_month", as_index=False)
+            .agg(
+                total_damages=("total_damages", "sum"),
+                total_pieces=("total_pieces", "sum"),
+                total_impressions=("total_impressions", "sum"),
+                jobs=("job_number", "count"),
+            )
+            .sort_values("production_month")
+        )
+
+        monthly_all["error_rate"] = monthly_all.apply(
+            lambda r: (float(r["total_damages"]) / float(r["total_pieces"]) * 100.0)
+            if float(r.get("total_pieces", 0) or 0) > 0
+            else 0.0,
+            axis=1,
+        )
+        monthly_all["error_rate_impressions"] = monthly_all.apply(
+            lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 100.0)
+            if float(r.get("total_impressions", 0) or 0) > 0
+            else 0.0,
+            axis=1,
+        )
+
         rate_basis = st.radio(
             "Customer ranking basis",
             ["Per Impressions (recommended)", "Per Pieces (legacy)"],
             horizontal=True,
+            key="overview_rate_basis",
         )
-
         rate_col = "error_rate_impressions" if rate_basis.startswith("Per Impressions") else "error_rate"
         rate_title = "Error Rate (% of impressions)" if rate_col == "error_rate_impressions" else "Error Rate (% of pieces)"
 
+        # KPIs (based on stats table)
         st.markdown("### 📊 Overall Quality Statistics")
         top1, top2, top3 = st.columns(3)
         bot1, bot2 = st.columns(2)
@@ -938,12 +976,73 @@ def main():
             st.metric("Company-Wide Error Rate", f"{company_rate:.2f}%")
 
         st.markdown("---")
+
+        # NEW: Add all-customers trendline + scatter (side by side)
+        lc, rc = st.columns(2)
+
+        with lc:
+            st.markdown("### 📉 All Customers Error Rate Trend (by Production Month)")
+            fig = px.line(
+                monthly_all,
+                x="production_month",
+                y=rate_col,
+                markers=True,
+                title=None,
+                hover_data={
+                    "jobs": True,
+                    "total_pieces": True,
+                    "total_impressions": True,
+                    "total_damages": True,
+                },
+            )
+            fig.update_traces(marker=dict(size=10))
+            fig.update_layout(
+                xaxis_title="Production Month",
+                yaxis_title=rate_title,
+                hovermode="x unified",
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
+            fig.update_xaxes(dtick="M1", tickformat="%b %Y")
+            st.plotly_chart(fig, use_container_width=True)
+
+        with rc:
+            st.markdown("### 🎯 Damages per 1,000 Impressions (by Job)")
+            fig = px.scatter(
+                jobs_df.sort_values("production_date"),
+                x="production_month",
+                y="damages_per_1000_impressions",
+                hover_name="job_number",
+                hover_data={
+                    "customer_name": True,
+                    "total_pieces": True,
+                    "total_impressions": True,
+                    "total_damages": True,
+                    "production_date": True,
+                },
+                title=None,
+            )
+            fig.update_traces(marker=dict(size=10, opacity=0.85))
+            fig.update_layout(
+                xaxis_title="Production Month",
+                yaxis_title="Damages per 1,000 Impressions",
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
+            fig.update_xaxes(dtick="M1", tickformat="%b %Y")
+            st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("### 🏆 Top 10 Best Customers (Lowest Error Rate)")
             best = stats_df.nsmallest(10, rate_col)
             fig = px.bar(best, x="customer_name", y=rate_col, title=None)
-            fig.update_layout(xaxis_title="Customer", yaxis_title=rate_title, showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
+            fig.update_layout(
+                xaxis_title="Customer",
+                yaxis_title=rate_title,
+                showlegend=False,
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
             fig.update_xaxes(tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
 
@@ -951,7 +1050,12 @@ def main():
             st.markdown("### ⚠️ Top 10 Customers Needing Attention (Highest Error Rate)")
             worst = stats_df.nlargest(10, rate_col)
             fig = px.bar(worst, x="customer_name", y=rate_col, title=None)
-            fig.update_layout(xaxis_title="Customer", yaxis_title=rate_title, showlegend=False, margin=dict(l=10, r=10, t=10, b=10))
+            fig.update_layout(
+                xaxis_title="Customer",
+                yaxis_title=rate_title,
+                showlegend=False,
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
             fig.update_xaxes(tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
 
@@ -1072,7 +1176,6 @@ def main():
                 if not new_customer_name:
                     st.error("❌ Customer name cannot be empty!")
                 else:
-                    # Friendly behavior: insert if missing, ignore if exists
                     add_customer(new_customer_name)
                     st.success(f"✅ Customer '{new_customer_name}' added (or already existed).")
                     st.rerun()
