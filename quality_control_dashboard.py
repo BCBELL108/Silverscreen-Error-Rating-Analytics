@@ -18,9 +18,10 @@ def get_engine():
 
 
 def init_db():
-    """Initialize Postgres tables"""
+    """Initialize Postgres tables + add non-destructive new column if needed."""
     eng = get_engine()
     with eng.begin() as conn:
+        # Customers
         conn.execute(
             text(
                 """
@@ -35,6 +36,7 @@ def init_db():
             )
         )
 
+        # Jobs (legacy error_rate = per pieces)
         conn.execute(
             text(
                 """
@@ -50,6 +52,16 @@ def init_db():
                     error_rate REAL NOT NULL,
                     notes TEXT
                 );
+                """
+            )
+        )
+
+        # NEW: add impressions-based column without touching existing data
+        conn.execute(
+            text(
+                """
+                ALTER TABLE jobs
+                ADD COLUMN IF NOT EXISTS error_rate_impressions REAL;
                 """
             )
         )
@@ -273,7 +285,6 @@ def load_default_customers():
     eng = get_engine()
     with eng.begin() as conn:
         count = conn.execute(text("SELECT COUNT(*) FROM customers")).scalar_one()
-
         if int(count) == 0:
             stmt = text(
                 """
@@ -286,36 +297,43 @@ def load_default_customers():
                 conn.execute(stmt, {"customer_name": customer})
 
 
-def add_customer(customer_name: str) -> bool:
+def get_all_customers() -> pd.DataFrame:
     eng = get_engine()
+    with eng.connect() as conn:
+        return pd.read_sql(
+            text(
+                """
+                SELECT id, customer_name, date_added, active, target_error_rate
+                FROM customers
+                WHERE active = 1
+                ORDER BY customer_name
+                """
+            ),
+            conn,
+        )
+
+
+def add_customer(customer_name: str) -> bool:
     customer_name = (customer_name or "").strip()
     if not customer_name:
         return False
 
+    eng = get_engine()
     with eng.begin() as conn:
-        conn.execute(
-            text(
-                """
-                INSERT INTO customers (customer_name)
-                VALUES (:customer_name)
-                ON CONFLICT (customer_name) DO NOTHING
-                """
-            ),
-            {"customer_name": customer_name},
-        )
-
-        # If it already existed, rowcount may be 0; treat that as False for UI
-        # We'll detect existence:
+        # Check first to preserve your old behavior: duplicates => False
         exists = conn.execute(
-            text("SELECT 1 FROM customers WHERE customer_name = :customer_name"),
-            {"customer_name": customer_name},
+            text("SELECT 1 FROM customers WHERE customer_name = :n"),
+            {"n": customer_name},
         ).fetchone()
 
-    # If it exists, it was either inserted or already there; return True only if inserted?
-    # Your old behavior returned False on duplicates. We can preserve that:
-    # We’ll check if there were duplicates by re-querying before insert would be better,
-    # but keep it simple:
-    return True  # UI is friendlier; if you want strict duplicate = False, tell me
+        if exists:
+            return False
+
+        conn.execute(
+            text("INSERT INTO customers (customer_name) VALUES (:n)"),
+            {"n": customer_name},
+        )
+        return True
 
 
 def update_customer_target(customer_id: int, target_error_rate: float) -> None:
@@ -327,23 +345,6 @@ def update_customer_target(customer_id: int, target_error_rate: float) -> None:
         )
 
 
-def get_all_customers() -> pd.DataFrame:
-    eng = get_engine()
-    with eng.connect() as conn:
-        df = pd.read_sql(
-            text(
-                """
-                SELECT id, customer_name, date_added, active, target_error_rate
-                FROM customers
-                WHERE active = 1
-                ORDER BY customer_name
-                """
-            ),
-            conn,
-        )
-    return df
-
-
 def add_job(
     customer_id: int,
     job_number: str,
@@ -353,7 +354,13 @@ def add_job(
     total_damages: int,
     notes: str = "",
 ) -> None:
-    error_rate = (total_damages / total_pieces * 100) if total_pieces > 0 else 0.0
+    # Legacy calculation (kept to avoid “corrupting” existing meaning)
+    error_rate_pieces = (total_damages / total_pieces * 100) if total_pieces > 0 else 0.0
+
+    # NEW calculation (impressions-based)
+    error_rate_impressions = (
+        (total_damages / total_impressions * 100) if total_impressions > 0 else 0.0
+    )
 
     eng = get_engine()
     with eng.begin() as conn:
@@ -368,6 +375,7 @@ def add_job(
                     total_impressions,
                     total_damages,
                     error_rate,
+                    error_rate_impressions,
                     notes
                 )
                 VALUES (
@@ -378,6 +386,7 @@ def add_job(
                     :total_impressions,
                     :total_damages,
                     :error_rate,
+                    :error_rate_impressions,
                     :notes
                 )
                 """
@@ -389,19 +398,34 @@ def add_job(
                 "total_pieces": int(total_pieces),
                 "total_impressions": int(total_impressions),
                 "total_damages": int(total_damages),
-                "error_rate": float(error_rate),
+                "error_rate": float(error_rate_pieces),
+                "error_rate_impressions": float(error_rate_impressions),
                 "notes": str(notes or ""),
             },
         )
 
 
 def get_all_jobs() -> pd.DataFrame:
+    """
+    Returns jobs with:
+      - legacy error_rate (per pieces) as stored
+      - error_rate_impressions_calc computed if NULL for older rows
+    """
     eng = get_engine()
     with eng.connect() as conn:
         df = pd.read_sql(
             text(
                 """
-                SELECT j.*, c.customer_name
+                SELECT
+                    j.*,
+                    c.customer_name,
+                    COALESCE(
+                        j.error_rate_impressions,
+                        CASE WHEN j.total_impressions > 0
+                             THEN (j.total_damages * 100.0 / j.total_impressions)
+                             ELSE 0
+                        END
+                    ) AS error_rate_impressions_calc
                 FROM jobs j
                 JOIN customers c ON j.customer_id = c.id
                 ORDER BY j.production_date DESC, j.date_entered DESC
@@ -418,35 +442,33 @@ def get_all_jobs() -> pd.DataFrame:
 
 def get_jobs_by_customer(customer_id: int, start_date=None, end_date=None) -> pd.DataFrame:
     eng = get_engine()
+    params = {"cid": int(customer_id)}
+
+    base_sql = """
+        SELECT
+            j.*,
+            c.customer_name,
+            COALESCE(
+                j.error_rate_impressions,
+                CASE WHEN j.total_impressions > 0
+                     THEN (j.total_damages * 100.0 / j.total_impressions)
+                     ELSE 0
+                END
+            ) AS error_rate_impressions_calc
+        FROM jobs j
+        JOIN customers c ON j.customer_id = c.id
+        WHERE j.customer_id = :cid
+    """
+
+    if start_date and end_date:
+        base_sql += " AND j.production_date BETWEEN :sd AND :ed"
+        params["sd"] = start_date
+        params["ed"] = end_date
+
+    base_sql += " ORDER BY j.production_date DESC"
+
     with eng.connect() as conn:
-        if start_date and end_date:
-            df = pd.read_sql(
-                text(
-                    """
-                    SELECT j.*, c.customer_name
-                    FROM jobs j
-                    JOIN customers c ON j.customer_id = c.id
-                    WHERE j.customer_id = :cid AND j.production_date BETWEEN :sd AND :ed
-                    ORDER BY j.production_date DESC
-                    """
-                ),
-                conn,
-                params={"cid": int(customer_id), "sd": start_date, "ed": end_date},
-            )
-        else:
-            df = pd.read_sql(
-                text(
-                    """
-                    SELECT j.*, c.customer_name
-                    FROM jobs j
-                    JOIN customers c ON j.customer_id = c.id
-                    WHERE j.customer_id = :cid
-                    ORDER BY j.production_date DESC
-                    """
-                ),
-                conn,
-                params={"cid": int(customer_id)},
-            )
+        df = pd.read_sql(text(base_sql), conn, params=params)
 
     if not df.empty and "production_date" in df.columns:
         df["production_date"] = pd.to_datetime(df["production_date"])
@@ -460,7 +482,16 @@ def get_jobs_by_date_range(start_date, end_date) -> pd.DataFrame:
         df = pd.read_sql(
             text(
                 """
-                SELECT j.*, c.customer_name
+                SELECT
+                    j.*,
+                    c.customer_name,
+                    COALESCE(
+                        j.error_rate_impressions,
+                        CASE WHEN j.total_impressions > 0
+                             THEN (j.total_damages * 100.0 / j.total_impressions)
+                             ELSE 0
+                        END
+                    ) AS error_rate_impressions_calc
                 FROM jobs j
                 JOIN customers c ON j.customer_id = c.id
                 WHERE j.production_date BETWEEN :sd AND :ed
@@ -478,9 +509,14 @@ def get_jobs_by_date_range(start_date, end_date) -> pd.DataFrame:
 
 
 def get_customer_stats() -> pd.DataFrame:
+    """
+    Customer overview that includes BOTH:
+      - legacy error_rate_pieces_agg
+      - new error_rate_impressions_agg (computed safely, does not overwrite rows)
+    """
     eng = get_engine()
     with eng.connect() as conn:
-        df = pd.read_sql(
+        return pd.read_sql(
             text(
                 """
                 SELECT
@@ -488,23 +524,31 @@ def get_customer_stats() -> pd.DataFrame:
                     c.target_error_rate,
                     COUNT(j.id) AS total_jobs,
                     COALESCE(SUM(j.total_pieces), 0) AS total_pieces,
+                    COALESCE(SUM(j.total_impressions), 0) AS total_impressions,
                     COALESCE(SUM(j.total_damages), 0) AS total_damages,
+
                     CASE
                         WHEN COALESCE(SUM(j.total_pieces), 0) > 0
                         THEN (COALESCE(SUM(j.total_damages), 0) * 100.0 / COALESCE(SUM(j.total_pieces), 0))
                         ELSE 0
-                    END AS error_rate
+                    END AS error_rate_pieces_agg,
+
+                    CASE
+                        WHEN COALESCE(SUM(j.total_impressions), 0) > 0
+                        THEN (COALESCE(SUM(j.total_damages), 0) * 100.0 / COALESCE(SUM(j.total_impressions), 0))
+                        ELSE 0
+                    END AS error_rate_impressions_agg
+
                 FROM customers c
                 LEFT JOIN jobs j ON c.id = j.customer_id
                 WHERE c.active = 1
                 GROUP BY c.id, c.customer_name, c.target_error_rate
                 HAVING COUNT(j.id) > 0
-                ORDER BY error_rate DESC
+                ORDER BY error_rate_impressions_agg DESC
                 """
             ),
             conn,
         )
-    return df
 
 
 def delete_job(job_id: int) -> None:
@@ -524,7 +568,7 @@ def main():
         layout="wide",
     )
 
-    # Quick connection check
+    # Connection check
     try:
         eng = get_engine()
         with eng.connect() as conn:
@@ -570,7 +614,7 @@ def main():
     st.markdown("---")
 
     # ========================================================================
-    # JOB DATA SUBMISSION PAGE
+    # JOB DATA SUBMISSION
     # ========================================================================
     if menu == "📝 Job Data Submission":
         st.header("Job Data Submission")
@@ -597,6 +641,7 @@ def main():
         )
 
         st.markdown("---")
+
         col1, col2 = st.columns(2)
 
         with col1:
@@ -608,11 +653,22 @@ def main():
         with col2:
             total_damages = st.number_input("Total Damages *", min_value=0, step=1)
 
+            # Show BOTH previews so it’s crystal clear
             if total_pieces > 0:
-                error_rate_preview = (total_damages / total_pieces) * 100
-                st.metric("Error Rate Preview", f"{error_rate_preview:.2f}%")
+                preview_pieces = (total_damages / total_pieces) * 100
             else:
-                st.metric("Error Rate Preview", "0.00%")
+                preview_pieces = 0.0
+
+            if total_impressions > 0:
+                preview_impressions = (total_damages / total_impressions) * 100
+            else:
+                preview_impressions = 0.0
+
+            cA, cB = st.columns(2)
+            with cA:
+                st.metric("Legacy Error Rate (per pieces)", f"{preview_pieces:.2f}%")
+            with cB:
+                st.metric("New Error Rate (per impressions)", f"{preview_impressions:.2f}%")
 
             notes = st.text_area("Notes (Optional)", placeholder="Any additional notes about this job...")
 
@@ -623,6 +679,8 @@ def main():
                 st.error("❌ Job Number is required!")
             elif total_pieces <= 0:
                 st.error("❌ Total Pieces must be greater than 0!")
+            elif total_impressions <= 0:
+                st.error("❌ Total Impressions must be greater than 0!")
             else:
                 add_job(
                     customer_id,
@@ -670,46 +728,109 @@ def main():
             st.warning("📭 No jobs found for this selection.")
             return
 
-        st.markdown("### 📊 Key Performance Metrics")
-        c1, c2, c3, c4 = st.columns(4)
-        with c1:
-            st.metric("Total Jobs", len(df))
-        with c2:
-            total_pieces = int(df["total_pieces"].sum())
-            st.metric("Total Pieces", f"{total_pieces:,}")
-        with c3:
-            total_damages = int(df["total_damages"].sum())
-            st.metric("Total Damages", f"{total_damages:,}")
-        with c4:
-            overall_error_rate = (total_damages / total_pieces) * 100 if total_pieces > 0 else 0
-            st.metric("Overall Error Rate", f"{overall_error_rate:.2f}%")
+        # Make sure both rates exist for charts
+        df = df.copy()
+        df["error_rate_legacy_pieces"] = df["error_rate"]
+        df["error_rate_impressions"] = df["error_rate_impressions_calc"]
 
-        st.caption(f"Target error rate: {target_rate:.1f}%")
+        st.markdown("### 📊 Key Performance Metrics")
+
+        total_jobs = len(df)
+        total_pieces = int(df["total_pieces"].sum())
+        total_impressions_sum = int(df["total_impressions"].sum())
+        total_damages = int(df["total_damages"].sum())
+
+        # Two overall rates:
+        overall_pieces = (total_damages / total_pieces * 100) if total_pieces > 0 else 0
+        overall_impressions = (total_damages / total_impressions_sum * 100) if total_impressions_sum > 0 else 0
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        with m1:
+            st.metric("Total Jobs", total_jobs)
+        with m2:
+            st.metric("Total Pieces", f"{total_pieces:,}")
+        with m3:
+            st.metric("Total Impressions", f"{total_impressions_sum:,}")
+        with m4:
+            st.metric("Total Damages", f"{total_damages:,}")
+        with m5:
+            st.metric("Error Rate (per impressions)", f"{overall_impressions:.2f}%")
+
+        st.caption(f"Target error rate (your target): {target_rate:.1f}% (you can interpret this against impressions now)")
+
         st.markdown("---")
 
+        # Toggle to compare rates
+        rate_mode = st.radio(
+            "Chart error rate using:",
+            ["New (per impressions)", "Legacy (per pieces)"],
+            horizontal=True,
+        )
+
+        rate_col = "error_rate_impressions" if rate_mode.startswith("New") else "error_rate_legacy_pieces"
+        chart_title = "Error Rate (per impressions)" if rate_mode.startswith("New") else "Error Rate (per pieces)"
+
         c1, c2 = st.columns(2)
+
         with c1:
-            st.markdown("### 📉 Error Rate Trend")
-            fig = px.line(df, x="production_date", y="error_rate", markers=True, title="Error Rate Over Time")
-            fig.update_layout(xaxis_title="Production Date", yaxis_title="Error Rate (%)", hovermode="x unified")
+            st.markdown(f"### 📉 {chart_title} Trend")
+            fig = px.line(
+                df.sort_values("production_date"),
+                x="production_date",
+                y=rate_col,
+                markers=True,
+                title=f"{chart_title} Over Time",
+            )
+            fig.update_layout(
+                xaxis_title="Production Date",
+                yaxis_title="Error Rate (%)",
+                hovermode="x unified",
+            )
             fig.add_hline(
-                y=target_rate, line_dash="dash",
+                y=target_rate,
+                line_dash="dash",
                 annotation_text=f"Target {target_rate:.1f}%",
-                annotation_position="top left"
+                annotation_position="top left",
             )
             st.plotly_chart(fig, use_container_width=True)
 
         with c2:
-            st.markdown("### 📊 Damages vs Total Pieces")
+            st.markdown("### 📊 Damages vs Impressions (by Job)")
             fig = go.Figure()
-            fig.add_trace(go.Bar(x=df["job_number"], y=df["total_pieces"], name="Total Pieces"))
+            fig.add_trace(go.Bar(x=df["job_number"], y=df["total_impressions"], name="Total Impressions"))
             fig.add_trace(go.Bar(x=df["job_number"], y=df["total_damages"], name="Damages"))
-            fig.update_layout(title="Pieces vs Damages by Job", xaxis_title="Job Number", yaxis_title="Count", barmode="group")
+            fig.update_layout(
+                title="Impressions vs Damages by Job",
+                xaxis_title="Job Number",
+                yaxis_title="Count",
+                barmode="group",
+            )
             st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("---")
-        csv = df.to_csv(index=False)
 
+        # NEW visual that makes denominator obvious
+        df["damages_per_1000_impressions"] = df.apply(
+            lambda r: (r["total_damages"] / r["total_impressions"] * 1000) if r["total_impressions"] else 0,
+            axis=1,
+        )
+
+        st.markdown("### 🎯 Damages per 1,000 Impressions (by Job)")
+        fig = px.bar(
+            df.sort_values("production_date"),
+            x="job_number",
+            y="damages_per_1000_impressions",
+            hover_data=["customer_name", "production_date", "total_impressions", "total_damages"],
+            title="Damages per 1,000 Impressions",
+        )
+        fig.update_layout(
+            xaxis_title="Job Number",
+            yaxis_title="Damages per 1,000 Impressions",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
+        csv = df.to_csv(index=False)
         safe_name = "all_customers" if selected_customer == "-- All Customers --" else selected_customer.replace(" ", "_")
         st.download_button(
             label="📊 Download Report (CSV)",
@@ -725,49 +846,93 @@ def main():
         st.header("Customer Quality Overview")
 
         stats_df = get_customer_stats()
+
         if stats_df.empty:
             st.info("📭 No job data available yet.")
             return
 
-        st.markdown("### 📊 Overall Quality Statistics")
-        c1, c2, c3, c4 = st.columns(4)
+        st.markdown("### 📊 Overall Quality Statistics (Impressions-Based)")
+
+        total_customers = len(stats_df)
+        total_jobs = int(stats_df["total_jobs"].sum())
+        total_pieces = int(stats_df["total_pieces"].sum())
+        total_impressions_sum = int(stats_df["total_impressions"].sum())
+        total_damages = int(stats_df["total_damages"].sum())
+
+        overall_impressions = (total_damages / total_impressions_sum * 100) if total_impressions_sum > 0 else 0
+        overall_pieces = (total_damages / total_pieces * 100) if total_pieces > 0 else 0
+
+        c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
-            st.metric("Total Customers", len(stats_df))
+            st.metric("Total Customers", total_customers)
         with c2:
-            st.metric("Total Jobs", int(stats_df["total_jobs"].sum()))
+            st.metric("Total Jobs", total_jobs)
         with c3:
-            st.metric("Total Pieces", f"{int(stats_df['total_pieces'].sum()):,}")
+            st.metric("Total Impressions", f"{total_impressions_sum:,}")
         with c4:
-            denom = stats_df["total_pieces"].sum()
-            overall_error = (stats_df["total_damages"].sum() / denom * 100) if denom else 0
-            st.metric("Company-Wide Error Rate", f"{overall_error:.2f}%")
+            st.metric("Total Damages", f"{total_damages:,}")
+        with c5:
+            st.metric("Company Error Rate (per impressions)", f"{overall_impressions:.2f}%")
+
+        st.caption(f"Legacy company error rate (per pieces): {overall_pieces:.2f}%")
 
         st.markdown("---")
+
+        # Best/Worst by impressions
+        best = stats_df.nsmallest(10, "error_rate_impressions_agg")
+        worst = stats_df.nlargest(10, "error_rate_impressions_agg")
+
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("### 🏆 Top 10 Best Customers (Lowest Error Rate)")
-            best = stats_df.nsmallest(10, "error_rate")
-            fig = px.bar(best, x="customer_name", y="error_rate", title="Best Performing Customers")
+            st.markdown("### 🏆 Top 10 Best Customers (Lowest per impressions)")
+            fig = px.bar(
+                best,
+                x="customer_name",
+                y="error_rate_impressions_agg",
+                title="Best Performing Customers (per impressions)",
+            )
             fig.update_layout(xaxis_title="Customer", yaxis_title="Error Rate (%)", showlegend=False)
             fig.update_xaxes(tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
 
         with c2:
-            st.markdown("### ⚠️ Top 10 Customers Needing Attention (Highest Error Rate)")
-            worst = stats_df.nlargest(10, "error_rate")
-            fig = px.bar(worst, x="customer_name", y="error_rate", title="Customers Needing Attention")
+            st.markdown("### ⚠️ Top 10 Customers Needing Attention (Highest per impressions)")
+            fig = px.bar(
+                worst,
+                x="customer_name",
+                y="error_rate_impressions_agg",
+                title="Customers Needing Attention (per impressions)",
+            )
             fig.update_layout(xaxis_title="Customer", yaxis_title="Error Rate (%)", showlegend=False)
             fig.update_xaxes(tickangle=-45)
             st.plotly_chart(fig, use_container_width=True)
 
-        st.markdown("### 📋 All Customer Statistics")
+        st.markdown("### 📋 All Customer Statistics (Both Rates)")
+
         display_df = stats_df.copy()
-        display_df["error_rate"] = display_df["error_rate"].apply(lambda x: f"{x:.2f}%")
+        display_df["error_rate_impressions_agg"] = display_df["error_rate_impressions_agg"].apply(lambda x: f"{x:.2f}%")
+        display_df["error_rate_pieces_agg"] = display_df["error_rate_pieces_agg"].apply(lambda x: f"{x:.2f}%")
         display_df["target_error_rate"] = display_df["target_error_rate"].apply(lambda x: f"{x:.1f}%")
+        display_df["total_impressions"] = display_df["total_impressions"].apply(lambda x: f"{int(x):,}")
         display_df["total_pieces"] = display_df["total_pieces"].apply(lambda x: f"{int(x):,}")
         display_df["total_damages"] = display_df["total_damages"].apply(lambda x: f"{int(x):,}")
         display_df["total_jobs"] = display_df["total_jobs"].apply(int)
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+        st.dataframe(
+            display_df[
+                [
+                    "customer_name",
+                    "total_jobs",
+                    "total_impressions",
+                    "total_damages",
+                    "error_rate_impressions_agg",
+                    "error_rate_pieces_agg",
+                    "target_error_rate",
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
 
         csv = stats_df.to_csv(index=False)
         st.download_button(
@@ -782,16 +947,18 @@ def main():
     # ========================================================================
     elif menu == "📋 View All Jobs":
         st.header("All Jobs")
-        df = get_all_jobs()
 
+        df = get_all_jobs()
         if df.empty:
             st.info("📭 No jobs in the database yet.")
             return
 
         st.markdown(f"### Total Jobs: {len(df)}")
+
         display_df = df.copy()
-        display_df["error_rate"] = display_df["error_rate"].apply(lambda x: f"{x:.2f}%")
         display_df["production_date"] = pd.to_datetime(display_df["production_date"]).dt.strftime("%Y-%m-%d")
+        display_df["error_rate"] = display_df["error_rate"].apply(lambda x: f"{float(x):.2f}%")
+        display_df["error_rate_impressions_calc"] = display_df["error_rate_impressions_calc"].apply(lambda x: f"{float(x):.2f}%")
 
         st.dataframe(
             display_df[
@@ -802,7 +969,8 @@ def main():
                     "total_pieces",
                     "total_impressions",
                     "total_damages",
-                    "error_rate",
+                    "error_rate",                  # legacy per pieces
+                    "error_rate_impressions_calc", # new per impressions (computed if NULL)
                     "notes",
                 ]
             ],
@@ -831,8 +999,9 @@ def main():
         if not filtered.empty and (search_term or customer_filter != "-- All --"):
             st.markdown(f"#### Found {len(filtered)} result(s)")
             display_filtered = filtered.copy()
-            display_filtered["error_rate"] = display_filtered["error_rate"].apply(lambda x: f"{x:.2f}%")
             display_filtered["production_date"] = pd.to_datetime(display_filtered["production_date"]).dt.strftime("%Y-%m-%d")
+            display_filtered["error_rate"] = display_filtered["error_rate"].apply(lambda x: f"{float(x):.2f}%")
+            display_filtered["error_rate_impressions_calc"] = display_filtered["error_rate_impressions_calc"].apply(lambda x: f"{float(x):.2f}%")
 
             st.dataframe(
                 display_filtered[
@@ -844,6 +1013,7 @@ def main():
                         "total_impressions",
                         "total_damages",
                         "error_rate",
+                        "error_rate_impressions_calc",
                         "notes",
                     ]
                 ],
@@ -867,9 +1037,12 @@ def main():
                 if not new_customer_name:
                     st.error("❌ Customer name cannot be empty!")
                 else:
-                    # Friendly behavior: insert if missing, ignore if exists
-                    add_customer(new_customer_name)
-                    st.success(f"✅ Customer '{new_customer_name}' added (or already existed).")
+                    success = add_customer(new_customer_name.strip())
+                    if success:
+                        st.success(f"✅ Customer '{new_customer_name}' added successfully!")
+                        st.balloons()
+                    else:
+                        st.error(f"❌ Customer '{new_customer_name}' already exists!")
                     st.rerun()
 
         with tab2:
@@ -878,7 +1051,7 @@ def main():
             st.markdown(f"**Total Customers:** {len(customers_df)}")
 
             display_df = customers_df.copy()
-            display_df["target_error_rate"] = display_df["target_error_rate"].apply(lambda x: f"{x:.1f}%")
+            display_df["target_error_rate"] = display_df["target_error_rate"].apply(lambda x: f"{float(x):.1f}%")
 
             st.dataframe(
                 display_df[["customer_name", "date_added", "target_error_rate"]],
@@ -891,7 +1064,11 @@ def main():
 
             if not customers_df.empty:
                 cust_name_for_target = st.selectbox("Select Customer", customers_df["customer_name"].tolist())
-                target_choice = st.selectbox("Target Error Rate", ["3.0%", "2.0%", "1.0%"])
+                target_choice = st.selectbox(
+                    "Target Error Rate",
+                    ["3.0%", "2.0%", "1.0%"],
+                    help="Standard quality targets. 1.0% is the most strict.",
+                )
                 target_value = float(target_choice.replace("%", ""))
 
                 if st.button("💾 Update Target Error Rate", type="primary"):
@@ -932,8 +1109,10 @@ def main():
                 st.write(f"**Date:** {pd.to_datetime(job_details['production_date']).strftime('%Y-%m-%d')}")
             with c2:
                 st.write(f"**Pieces:** {int(job_details['total_pieces']):,}")
+                st.write(f"**Impressions:** {int(job_details['total_impressions']):,}")
                 st.write(f"**Damages:** {int(job_details['total_damages']):,}")
-                st.write(f"**Error Rate:** {float(job_details['error_rate']):.2f}%")
+                st.write(f"**Legacy Error Rate (per pieces):** {float(job_details['error_rate']):.2f}%")
+                st.write(f"**New Error Rate (per impressions):** {float(job_details['error_rate_impressions_calc']):.2f}%")
 
             if st.button("🗑️ Delete This Job", type="primary"):
                 delete_job(job_id)
