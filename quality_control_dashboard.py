@@ -488,12 +488,18 @@ def get_customer_stats() -> pd.DataFrame:
                     c.target_error_rate,
                     COUNT(j.id) AS total_jobs,
                     COALESCE(SUM(j.total_pieces), 0) AS total_pieces,
+                    COALESCE(SUM(j.total_impressions), 0) AS total_impressions,
                     COALESCE(SUM(j.total_damages), 0) AS total_damages,
                     CASE
                         WHEN COALESCE(SUM(j.total_pieces), 0) > 0
                         THEN (COALESCE(SUM(j.total_damages), 0) * 100.0 / COALESCE(SUM(j.total_pieces), 0))
                         ELSE 0
-                    END AS error_rate
+                    END AS error_rate,
+                    CASE
+                        WHEN COALESCE(SUM(j.total_impressions), 0) > 0
+                        THEN (COALESCE(SUM(j.total_damages), 0) * 100.0 / COALESCE(SUM(j.total_impressions), 0))
+                        ELSE 0
+                    END AS error_rate_impressions
                 FROM customers c
                 LEFT JOIN jobs j ON c.id = j.customer_id
                 WHERE c.active = 1
@@ -762,24 +768,77 @@ def main():
         st.markdown("---")
 
         # ----------------------------------------------------------------
-        # Visuals
-        # - Months on the x-axis (production_date)
-        # - Scatter hover shows job number
+        # Visuals (Month-based)
+        # - Use production_month on x-axis for ALL charts
+        # - Hover shows job number
+        # - Scatter dots are consistent size (no giant bubbles)
         # ----------------------------------------------------------------
+
+        # Make sure we have the impressions-based rate available for visuals
+        df["error_rate_impressions"] = df.apply(
+            lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 100.0)
+            if float(r.get("total_impressions", 0) or 0) > 0
+            else 0.0,
+            axis=1,
+        )
+
+        df["production_date"] = pd.to_datetime(df["production_date"], errors="coerce")
+        df = df.dropna(subset=["production_date"]).copy()
+        df["production_month"] = df["production_date"].dt.to_period("M").dt.to_timestamp()
+
+        # Monthly rollup for the trend line so it never looks blank
+        monthly = (
+            df.groupby("production_month", as_index=False)
+            .agg(
+                total_damages=("total_damages", "sum"),
+                total_pieces=("total_pieces", "sum"),
+                total_impressions=("total_impressions", "sum"),
+                jobs=("job_number", "count"),
+            )
+            .sort_values("production_month")
+        )
+
+        monthly["error_rate"] = monthly.apply(
+            lambda r: (float(r["total_damages"]) / float(r["total_pieces"]) * 100.0)
+            if float(r.get("total_pieces", 0) or 0) > 0
+            else 0.0,
+            axis=1,
+        )
+        monthly["error_rate_impressions"] = monthly.apply(
+            lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 100.0)
+            if float(r.get("total_impressions", 0) or 0) > 0
+            else 0.0,
+            axis=1,
+        )
+        monthly["damages_per_1000_impressions"] = monthly.apply(
+            lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 1000.0)
+            if float(r.get("total_impressions", 0) or 0) > 0
+            else 0.0,
+            axis=1,
+        )
+
         left, right = st.columns(2)
 
         with left:
             st.markdown("### 📉 Error Rate Trend (by Production Month)")
+
             fig = px.line(
-                df.sort_values("production_date"),
-                x="production_date",
+                monthly,
+                x="production_month",
                 y=rate_col,
                 markers=True,
                 title=None,
-                hover_data={"job_number": True, "total_pieces": True, "total_impressions": True, "total_damages": True},
+                hover_data={
+                    "jobs": True,
+                    "total_pieces": True,
+                    "total_impressions": True,
+                    "total_damages": True,
+                },
             )
+            # slightly bigger markers so the chart reads even with few points
+            fig.update_traces(marker=dict(size=10))
             fig.update_layout(
-                xaxis_title="Production Date",
+                xaxis_title="Production Month",
                 yaxis_title=rate_label,
                 hovermode="x unified",
                 margin=dict(l=10, r=10, t=10, b=10),
@@ -794,33 +853,33 @@ def main():
             st.plotly_chart(fig, use_container_width=True)
 
         with right:
-            st.markdown("### 🎯 Damages per 1,000 Impressions")
+            st.markdown("### 🎯 Damages per 1,000 Impressions (by Job)")
 
-            # Job-level scatter (x = production month, hover = job number)
             fig = px.scatter(
                 df.sort_values("production_date"),
-                x="production_date",
+                x="production_month",
                 y="damages_per_1000_impressions",
-                size="total_impressions",
                 hover_name="job_number",
                 hover_data={
                     "customer_name": True,
                     "total_pieces": True,
                     "total_impressions": True,
                     "total_damages": True,
-                    "error_rate": ":.2f",
-                    "error_rate_impressions": ":.2f",
                     "production_date": True,
                 },
                 title=None,
             )
+            # consistent dot sizes (no size= column)
+            fig.update_traces(marker=dict(size=10, opacity=0.85))
             fig.update_layout(
-                xaxis_title="Production Date",
+                xaxis_title="Production Month",
                 yaxis_title="Damages per 1,000 Impressions",
                 margin=dict(l=10, r=10, t=10, b=10),
             )
             fig.update_xaxes(dtick="M1", tickformat="%b %Y")
             st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("---")
 
         st.markdown("---")
         csv = df.to_csv(index=False)
