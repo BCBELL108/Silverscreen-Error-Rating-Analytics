@@ -5,6 +5,19 @@ import plotly.express as px
 import plotly.graph_objects as go
 from sqlalchemy import text
 
+# ----------------------------------------------------------------------------
+# Helpers
+# ----------------------------------------------------------------------------
+def _fmt_percent(x):
+    """Format numeric-like values as a percent string; return blank for null/invalid."""
+    try:
+        if pd.isna(x):
+            return ""
+        return f"{float(x):.2f}%"
+    except Exception:
+        return ""
+
+
 # ============================================================================
 # DATABASE (NEON / POSTGRES via Streamlit Secrets)
 # ============================================================================
@@ -1093,10 +1106,19 @@ def main():
 
         st.markdown(f"### Total Jobs: {len(df)}")
         display_df = df.copy()
-        display_df["error_rate"] = display_df["error_rate"].apply(lambda x: f"{x:.2f}%")
+        # Ensure impressions-based error rate exists for display (older rows may not have it)
+        if "error_rate_impressions" not in display_df.columns:
+            display_df["error_rate_impressions"] = display_df.apply(
+                lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 100.0)
+                if float(r.get("total_impressions", 0) or 0) > 0
+                else 0.0,
+                axis=1,
+            )
+
+        display_df["error_rate"] = display_df["error_rate"].apply(_fmt_percent)
         if "error_rate_impressions" in display_df.columns:
-            display_df["error_rate_impressions"] = display_df["error_rate_impressions"].apply(lambda x: f"{x:.2f}%")
-        display_df["production_date"] = pd.to_datetime(display_df["production_date"]).dt.strftime("%Y-%m-%d")
+            display_df["error_rate_impressions"] = display_df["error_rate_impressions"].apply(_fmt_percent)
+        display_df["production_date"] = pd.to_datetime(display_df["production_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
         st.dataframe(
             display_df[
@@ -1137,10 +1159,19 @@ def main():
         if not filtered.empty and (search_term or customer_filter != "-- All --"):
             st.markdown(f"#### Found {len(filtered)} result(s)")
             display_filtered = filtered.copy()
-            display_filtered["error_rate"] = display_filtered["error_rate"].apply(lambda x: f"{x:.2f}%")
+            # Ensure impressions-based error rate exists for display (older rows may not have it)
+            if "error_rate_impressions" not in display_filtered.columns:
+                display_filtered["error_rate_impressions"] = display_filtered.apply(
+                    lambda r: (float(r["total_damages"]) / float(r["total_impressions"]) * 100.0)
+                    if float(r.get("total_impressions", 0) or 0) > 0
+                    else 0.0,
+                    axis=1,
+                )
+
+            display_filtered["error_rate"] = display_filtered["error_rate"].apply(_fmt_percent)
             if "error_rate_impressions" in display_filtered.columns:
-                display_filtered["error_rate_impressions"] = display_filtered["error_rate_impressions"].apply(lambda x: f"{x:.2f}%")
-            display_filtered["production_date"] = pd.to_datetime(display_filtered["production_date"]).dt.strftime("%Y-%m-%d")
+                display_filtered["error_rate_impressions"] = display_filtered["error_rate_impressions"].apply(_fmt_percent)
+            display_filtered["production_date"] = pd.to_datetime(display_filtered["production_date"], errors="coerce").dt.strftime("%Y-%m-%d")
 
             st.dataframe(
                 display_filtered[
