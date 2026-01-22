@@ -17,6 +17,15 @@ def _fmt_percent(x):
     except Exception:
         return ""
 
+def _fmt_mmddyyyy(val):
+    """Format a date/datetime/series to MM/DD/YYYY for UI display."""
+    try:
+        if isinstance(val, pd.Series):
+            return pd.to_datetime(val, errors="coerce").dt.strftime("%m/%d/%Y")
+        return pd.to_datetime(val, errors="coerce").strftime("%m/%d/%Y")
+    except Exception:
+        return ""
+
 
 # ============================================================================
 # DATABASE (NEON / POSTGRES via Streamlit Secrets)
@@ -632,7 +641,11 @@ def main():
 
         with col1:
             job_number = st.text_input("Job Number *", placeholder="e.g., FF-19547")
-            production_date = st.date_input("Production Date *", value=datetime.today())
+            production_date = st.date_input(
+                "Production Date *",
+                value=datetime.today(),
+                format="MM/DD/YYYY",
+            )
             total_pieces = st.number_input("Total Pieces Printed *", min_value=0, step=1)
             total_impressions = st.number_input("Total Impressions *", min_value=0, step=1)
 
@@ -690,23 +703,34 @@ def main():
 
         col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
-            start_date = st.date_input("Start Date", value=datetime.today() - timedelta(days=30))
+            start_date = st.date_input(
+                "Start Date",
+                value=datetime.today() - timedelta(days=30),
+                format="MM/DD/YYYY",
+            )
         with col2:
-            end_date = st.date_input("End Date", value=datetime.today())
+            end_date = st.date_input(
+                "End Date",
+                value=datetime.today(),
+                format="MM/DD/YYYY",
+            )
         with col3:
             if st.button("🔄 Refresh", use_container_width=True):
                 st.rerun()
 
+        start_disp = _fmt_mmddyyyy(start_date)
+        end_disp = _fmt_mmddyyyy(end_date)
+
         if selected_customer == "-- All Customers --":
             df = get_jobs_by_date_range(start_date, end_date)
-            st.subheader(f"All Customers - {start_date} to {end_date}")
+            st.subheader(f"All Customers - {start_disp} to {end_disp}")
             target_rate = 2.0
         else:
             customer_row = customers_df[customers_df["customer_name"] == selected_customer].iloc[0]
             customer_id = int(customer_row["id"])
             target_rate = float(customer_row.get("target_error_rate", 2.0) or 2.0)
             df = get_jobs_by_customer(customer_id, start_date, end_date)
-            st.subheader(f"{selected_customer} - {start_date} to {end_date}")
+            st.subheader(f"{selected_customer} - {start_disp} to {end_disp}")
 
         if df.empty:
             st.warning("📭 No jobs found for this selection.")
@@ -891,9 +915,19 @@ def main():
         # NEW: Date range for "All Customers Overview" (so trendline/scatter are meaningful)
         cA, cB, cC = st.columns([2, 2, 1])
         with cA:
-            start_date = st.date_input("Start Date", value=datetime.today() - timedelta(days=90), key="all_overview_start")
+            start_date = st.date_input(
+                "Start Date",
+                value=datetime.today() - timedelta(days=90),
+                key="all_overview_start",
+                format="MM/DD/YYYY",
+            )
         with cB:
-            end_date = st.date_input("End Date", value=datetime.today(), key="all_overview_end")
+            end_date = st.date_input(
+                "End Date",
+                value=datetime.today(),
+                key="all_overview_end",
+                format="MM/DD/YYYY",
+            )
         with cC:
             if st.button("🔄 Refresh", use_container_width=True, key="all_overview_refresh"):
                 st.rerun()
@@ -1030,7 +1064,7 @@ def main():
                     "total_pieces": True,
                     "total_impressions": True,
                     "total_damages": True,
-                    "production_date": True,
+                    "production_date": True,  # hover formatting is Plotly; leaving raw is fine
                 },
                 title=None,
             )
@@ -1218,6 +1252,7 @@ def main():
 
             display_df = customers_df.copy()
             display_df["target_error_rate"] = display_df["target_error_rate"].apply(lambda x: f"{x:.1f}%")
+            display_df["date_added"] = _fmt_mmddyyyy(display_df["date_added"])
 
             st.dataframe(
                 display_df[["customer_name", "date_added", "target_error_rate"]],
@@ -1254,7 +1289,7 @@ def main():
         st.warning("⚠️ Warning: Deleting a job is permanent!")
 
         job_options = df.apply(
-            lambda row: f"{row['customer_name']} - {row['job_number']} - {pd.to_datetime(row['production_date']).strftime('%Y-%m-%d')} (ID: {row['id']})",
+            lambda row: f"{row['customer_name']} - {row['job_number']} - {pd.to_datetime(row['production_date']).strftime('%m/%d/%Y')} (ID: {row['id']})",
             axis=1,
         ).tolist()
 
@@ -1268,7 +1303,7 @@ def main():
             with c1:
                 st.write(f"**Customer:** {job_details['customer_name']}")
                 st.write(f"**Job Number:** {job_details['job_number']}")
-                st.write(f"**Date:** {pd.to_datetime(job_details['production_date']).strftime('%Y-%m-%d')}")
+                st.write(f"**Date:** {pd.to_datetime(job_details['production_date']).strftime('%m/%d/%Y')}")
             with c2:
                 st.write(f"**Pieces:** {int(job_details['total_pieces']):,}")
                 st.write(f"**Damages:** {int(job_details['total_damages']):,}")
